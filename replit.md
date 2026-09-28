@@ -11,6 +11,16 @@ Discord bot koji prikuplja prijave novih članova, šalje ih HC-u na potvrdu i n
 - `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
 - Required secret: `DISCORD_BOT_TOKEN` — Discord bot token
 
+## Railway
+
+- Railway automatically installs dependencies and uses `railway.json` to build
+  and start the bot; no manual terminal command is required after import.
+- Set only `DISCORD_BOT_TOKEN` in Railway Variables. Railway supplies `PORT`.
+- Attach a Railway Volume to `/app/data`; Railway supplies
+  `RAILWAY_VOLUME_MOUNT_PATH` automatically so bot settings survive restarts.
+- The bundled runtime starts from `artifacts/api-server/dist/main.mjs`.
+- Railway health checks use `/api/healthz`.
+
 ## Stack
 
 - pnpm workspaces, Node.js 24, TypeScript 5.9
@@ -23,7 +33,7 @@ Discord bot koji prikuplja prijave novih članova, šalje ih HC-u na potvrdu i n
 ## Where things live
 
 - `artifacts/api-server/src/discord-bot.ts` — Discord događaji, komande i verifikacioni tok
-- `artifacts/api-server/data/verification-state.json` — podešavanje servera i prijave (kreira se pri prvom korišćenju)
+- `<RAILWAY_VOLUME_MOUNT_PATH>/verification-state.json` — podešavanje servera i prijave na Railway Volume-u
 
 ## Architecture decisions
 

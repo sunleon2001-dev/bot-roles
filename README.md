@@ -48,6 +48,27 @@ Server sluša na vrednosti `PORT` varijable i health endpoint je dostupan na:
 /api/healthz
 ```
 
+## Railway deploy bez terminala
+
+Projekat već sadrži `railway.json` i `railpack.json`, tako da Railway automatski
+instalira zavisnosti, builda bot i pokreće ga bez ručnog pokretanja `pnpm`,
+`npm` ili drugih komandi.
+
+1. U Railway-u napravi novi projekat iz ovog GitHub repozitorijuma ili zip
+   projekta.
+2. U **Variables** dodaj `DISCORD_BOT_TOKEN` i nalepi token Discord bot
+   aplikacije.
+3. Klikni **Deploy**. Railway automatski koristi `PORT` koji dodeli servisu i
+   proverava `/api/healthz`.
+
+Runtime je bundlovan u jedan fajl `artifacts/api-server/dist/main.mjs`.
+Izvorni bot i HTTP health server dele jedan ulazni fajl
+`artifacts/api-server/src/discord-bot.ts`, dok Railway sam izvršava build i
+start podešavanja iz konfiguracije.
+
+Nakon prvog pokretanja podešavanje servera se radi Discord slash komandama
+navedenim ispod, bez korišćenja terminala.
+
 ## Discord bot dozvole
 
 Botu su potrebne sledeće dozvole:
@@ -139,10 +160,20 @@ Za ovu komandu bot mora imati `Manage Roles` i `Manage Channels`.
 Konfiguracija servera i prijave se čuvaju u:
 
 ```text
-artifacts/api-server/data/verification-state.json
+<RAILWAY_VOLUME_MOUNT_PATH>/verification-state.json
 ```
 
-Ovaj fajl je lokalni runtime state i namerno se ne uključuje u GitHub paket. Direktorijum se kreira automatski pri prvom korišćenju.
+Za trajno čuvanje na Railway-u jednom dodaj Volume na bot servis:
+
+1. Otvori Railway projekat i izaberi bot servis.
+2. Otvori **Volumes** → **Add Volume**.
+3. Kao **Mount Path** upiši `/app/data`.
+4. Redeploy servis.
+
+Railway će automatski postaviti `RAILWAY_VOLUME_MOUNT_PATH`, a bot će koristiti
+taj Volume za `verification-state.json`. Ne treba dodavati novu promenljivu
+ruku niti pokretati komande. Bez Volume-a bot i dalje radi, ali podaci ostaju
+na privremenom filesystemu i mogu nestati nakon zamene instance.
 
 ## Provere
 
@@ -156,7 +187,7 @@ PORT=8081 BASE_PATH=/__mockup pnpm run build
 ## Struktura
 
 - `artifacts/api-server/src/discord-bot.ts` — Discord komande, eventovi i verification tok
-- `artifacts/api-server/src/index.ts` — pokretanje Express servera i Discord bota
+- `artifacts/api-server/src/discord-bot.ts` — Discord bot, Express server i health endpoint
 - `artifacts/api-server/src/routes/health.ts` — health endpoint
 - `lib/api-spec` i `lib/api-zod` — API specifikacija i generisani tipovi
 - `artifacts/mockup-sandbox` — postojeći komponentni preview artifact

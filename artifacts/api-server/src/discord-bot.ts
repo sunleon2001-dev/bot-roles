@@ -29,9 +29,22 @@ import {
   type StringSelectMenuInteraction,
   type User,
 } from "discord.js";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import cors from "cors";
+import express from "express";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { logger } from "./lib/logger";
+
+const logger = {
+  info(details: unknown, message?: string) {
+    console.log(message ?? details, message ? details : "");
+  },
+  warn(details: unknown, message?: string) {
+    console.warn(message ?? details, message ? details : "");
+  },
+  error(details: unknown, message?: string) {
+    console.error(message ?? details, message ? details : "");
+  },
+};
 
 type ApplicationStatus = "pending" | "approved" | "rejected";
 
@@ -74,7 +87,9 @@ type BotState = {
   applications: Record<string, Application>;
 };
 
-const statePath = path.resolve(process.cwd(), "data", "verification-state.json");
+const dataDirectory =
+  process.env["RAILWAY_VOLUME_MOUNT_PATH"] ?? path.resolve(process.cwd(), "data");
+const statePath = path.join(dataDirectory, "verification-state.json");
 const defaultState: BotState = { guilds: {}, applications: {} };
 
 const client = new Client({
@@ -122,7 +137,9 @@ async function loadState(): Promise<BotState> {
 function saveState(): Promise<void> {
   stateWriteQueue = stateWriteQueue.then(async () => {
     await mkdir(path.dirname(statePath), { recursive: true });
-    await writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+    const temporaryStatePath = `${statePath}.tmp`;
+    await writeFile(temporaryStatePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+    await rename(temporaryStatePath, statePath);
   });
   return stateWriteQueue;
 }
@@ -1402,3 +1419,23 @@ export async function startDiscordBot(): Promise<void> {
 
   await client.login(token);
 }
+
+const app = express();
+app.use(cors());
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.get("/api/healthz", (_request, response) => {
+  response.json({ status: "ok" });
+});
+
+const rawPort = process.env["PORT"] ?? "8080";
+const port = Number(rawPort);
+if (!Number.isInteger(port) || port <= 0) {
+  throw new Error(`Invalid PORT value: "${rawPort}"`);
+}
+
+app.listen(port, () => {
+  logger.info({ port }, "HTTP server listening");
+});
+
+await startDiscordBot();
