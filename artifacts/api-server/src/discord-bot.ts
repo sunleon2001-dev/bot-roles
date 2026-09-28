@@ -1,0 +1,1404 @@
+import {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  ChannelType,
+  Client,
+  EmbedBuilder,
+  Events,
+  GatewayIntentBits,
+  ModalBuilder,
+  Partials,
+  PermissionsBitField,
+  PermissionFlagsBits,
+  StringSelectMenuBuilder,
+  TextInputBuilder,
+  TextInputStyle,
+  type ButtonInteraction,
+  type ChatInputCommandInteraction,
+  type Guild,
+  type GuildMember,
+  type Message,
+  type MessageReaction,
+  type ModalSubmitInteraction,
+  type PartialMessageReaction,
+  type PartialUser,
+  type PermissionOverwriteOptions,
+  type PermissionOverwrites,
+  type Role,
+  type StringSelectMenuInteraction,
+  type User,
+} from "discord.js";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { logger } from "./lib/logger";
+
+type ApplicationStatus = "pending" | "approved" | "rejected";
+
+type RankRole = {
+  rank: number;
+  roleId: string;
+};
+
+type GuildConfig = {
+  targetChannelId?: string;
+  targetMessageId?: string;
+  hcChannelId?: string;
+  logChannelId?: string;
+  reactionEmoji: string;
+  hcRoleIds: string[];
+  rankRoles: RankRole[];
+};
+
+type Application = {
+  id: string;
+  guildId: string;
+  applicantId: string;
+  firstName: string;
+  lastName: string;
+  memberId: string;
+  rank: number;
+  invitedBy: string;
+  invitedById?: string;
+  rejectionReason?: string;
+  status: ApplicationStatus;
+  approvalMessageId?: string;
+  createdAt: string;
+  decidedAt?: string;
+  decidedBy?: string;
+  nicknameApplied?: boolean;
+};
+
+type BotState = {
+  guilds: Record<string, GuildConfig>;
+  applications: Record<string, Application>;
+};
+
+const statePath = path.resolve(process.cwd(), "data", "verification-state.json");
+const defaultState: BotState = { guilds: {}, applications: {} };
+
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessageReactions,
+  ],
+  partials: [Partials.Message, Partials.Channel, Partials.Reaction],
+});
+
+const state = await loadState();
+let stateWriteQueue = Promise.resolve();
+
+const commandNames = {
+  setup: "verification-setup",
+  addRank: "rank-add",
+  removeRank: "rank-remove",
+  listRanks: "rank-list",
+  addHcRole: "hc-role-add",
+  removeHcRole: "hc-role-remove",
+  listHcRoles: "hc-role-list",
+  status: "verification-status",
+  copyRole: "copy-role",
+} as const;
+
+async function loadState(): Promise<BotState> {
+  try {
+    const raw = await readFile(statePath, "utf8");
+    const parsed = JSON.parse(raw) as Partial<BotState>;
+    return {
+      guilds: parsed.guilds ?? {},
+      applications: parsed.applications ?? {},
+    };
+  } catch (error) {
+    const code = error && typeof error === "object" && "code" in error
+      ? error.code
+      : undefined;
+    if (code !== "ENOENT") {
+      logger.warn({ err: error }, "Could not read verification state; starting empty");
+    }
+    return structuredClone(defaultState);
+  }
+}
+
+function saveState(): Promise<void> {
+  stateWriteQueue = stateWriteQueue.then(async () => {
+    await mkdir(path.dirname(statePath), { recursive: true });
+    await writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+  });
+  return stateWriteQueue;
+}
+
+function getGuildConfig(guildId: string): GuildConfig {
+  const existing = state.guilds[guildId];
+  if (existing) {
+    existing.rankRoles ??= [];
+    existing.reactionEmoji ??= "✅";
+    existing.hcRoleIds ??= [];
+    return existing;
+  }
+  const config: GuildConfig = {
+    rankRoles: [],
+    reactionEmoji: "✅",
+    hcRoleIds: [],
+  };
+  state.guilds[guildId] = config;
+  return config;
+}
+
+function isAdmin(interaction: ChatInputCommandInteraction | ButtonInteraction | ModalSubmitInteraction): boolean {
+  const permissions = interaction.memberPermissions;
+  return Boolean(
+    permissions?.has(PermissionsBitField.Flags.Administrator) ||
+      permissions?.has(PermissionsBitField.Flags.ManageGuild),
+  );
+}
+
+function canProcessApplications(
+  interaction: ButtonInteraction | ModalSubmitInteraction,
+  config: GuildConfig | undefined,
+): boolean {
+  if (isAdmin(interaction)) return true;
+  return hasConfiguredHcRole(interaction, config);
+}
+
+function hasConfiguredHcRole(
+  interaction: ChatInputCommandInteraction | ButtonInteraction | ModalSubmitInteraction,
+  config: GuildConfig | undefined,
+): boolean {
+  if (!config?.hcRoleIds.length) return false;
+  const member = interaction.member;
+  if (!member || !("roles" in member)) return false;
+  return config.hcRoleIds.some((roleId) =>
+    Array.isArray(member.roles) ? member.roles.includes(roleId) : member.roles.cache.has(roleId),
+  );
+}
+
+function isApplicationStaff(interaction: ChatInputCommandInteraction): boolean {
+  return isAdmin(interaction);
+}
+
+function canUseHcCommand(interaction: ChatInputCommandInteraction | ButtonInteraction): boolean {
+  return isAdmin(interaction) || hasConfiguredHcRole(interaction, state.guilds[interaction.guildId ?? ""]);
+}
+
+function getRankRole(config: GuildConfig, rank: number): RankRole | undefined {
+  return config.rankRoles.find((entry) => entry.rank === rank);
+}
+
+function applicationButtons(applicationId: string, disabled = false) {
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`approve_application:${applicationId}`)
+      .setLabel("Odobri")
+      .setStyle(ButtonStyle.Success)
+      .setDisabled(disabled),
+    new ButtonBuilder()
+      .setCustomId(`reject_application:${applicationId}`)
+      .setLabel("Odbij")
+      .setStyle(ButtonStyle.Danger)
+      .setDisabled(disabled),
+  );
+}
+
+function copyRoleButton(sourceRoleId: string, targetRoleId: string, disabled = false) {
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`copy_role:${sourceRoleId}:${targetRoleId}`)
+      .setLabel("Kopiraj sve")
+      .setEmoji("✅")
+      .setStyle(ButtonStyle.Success)
+      .setDisabled(disabled),
+  );
+}
+
+function applicationEmbed(
+  application: Application,
+  memberMention: string,
+  roleMention: string,
+): EmbedBuilder {
+  const color = application.status === "approved"
+    ? 0x3fb950
+    : application.status === "rejected"
+      ? 0xf85149
+      : 0xf0b429;
+
+  const status = application.status === "approved"
+    ? "ODOBRENO"
+    : application.status === "rejected"
+      ? "ODBIJENO"
+      : "ČEKA POTVRDU";
+
+  const embed = new EmbedBuilder()
+    .setColor(color)
+    .setTitle(`Nova prijava — ${status}`)
+    .setDescription(`Kandidat: ${memberMention}\nPrijava: \`${application.id}\``)
+    .addFields(
+      { name: "Ime", value: application.firstName, inline: true },
+      { name: "Prezime", value: application.lastName, inline: true },
+      { name: "ID", value: application.memberId, inline: true },
+      { name: "Rank", value: `Rank ${application.rank}`, inline: true },
+      { name: "Ko ga je ubacio", value: application.invitedBy, inline: true },
+      { name: "Dodeljena uloga", value: roleMention, inline: true },
+    )
+    .setTimestamp(new Date(application.createdAt));
+
+  if (application.rejectionReason) {
+    embed.addFields({ name: "Razlog odbijanja", value: application.rejectionReason });
+  }
+  if (application.decidedAt) {
+    embed.addFields({ name: "Vreme odluke", value: `<t:${Math.floor(new Date(application.decidedAt).getTime() / 1000)}:F>` });
+  }
+  return embed;
+}
+
+function buildApplicationModal(guildId: string, rank: number): ModalBuilder {
+  const input = (
+    customId: string,
+    label: string,
+    placeholder: string,
+    style = TextInputStyle.Short,
+  ) =>
+    new TextInputBuilder()
+      .setCustomId(customId)
+      .setLabel(label)
+      .setPlaceholder(placeholder)
+      .setStyle(style)
+      .setRequired(true)
+      .setMaxLength(100);
+
+  return new ModalBuilder()
+    .setCustomId(`submit_application:${guildId}`)
+    .setTitle("Prijava za server")
+    .addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        input("first_name", "Ime", "Unesi ime"),
+      ),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        input("last_name", "Prezime", "Unesi prezime"),
+      ),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        input("member_id", "ID", "Unesi svoj ID"),
+      ),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        input("invited_by", "Ko te je ubacio", "@korisnik ili Discord ID"),
+      ),
+    );
+}
+
+function applicationPrompt(guildId: string, config: GuildConfig) {
+  const rankOptions = config.rankRoles.map((entry) => ({
+    label: `Rank ${entry.rank}`,
+    value: String(entry.rank),
+    description: "Izaberi rank za koji se prijavljuješ",
+  }));
+
+  return {
+    content:
+      rankOptions.length > 0
+        ? "Reagovao si na prijavu. Prvo izaberi rank, pa otvori privatnu formu."
+        : "HC još nije podesio rankove. Pokušaj ponovo kasnije.",
+    components: [
+      ...(rankOptions.length > 0
+        ? [
+            new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+              new StringSelectMenuBuilder()
+                .setCustomId(`choose_rank:${guildId}`)
+                .setPlaceholder("Izaberi rank")
+                .addOptions(rankOptions),
+            ),
+          ]
+        : []),
+    ],
+  };
+}
+
+function buildSelectedRankPrompt(guildId: string, rank: number) {
+  return {
+    content: `Izabran je **Rank ${rank}**. Klikni dugme da popuniš privatnu formu.`,
+    components: [
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`open_application:${guildId}:${rank}`)
+          .setLabel("Otvori prijavu")
+          .setStyle(ButtonStyle.Primary),
+      ),
+    ],
+  };
+}
+
+function buildRejectionModal(applicationId: string): ModalBuilder {
+  return new ModalBuilder()
+    .setCustomId(`reject_reason:${applicationId}`)
+    .setTitle("Odbijanje prijave")
+    .addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId("reason")
+          .setLabel("Razlog odbijanja")
+          .setPlaceholder("Opcionalno")
+          .setStyle(TextInputStyle.Paragraph)
+          .setRequired(false)
+          .setMaxLength(500),
+      ),
+    );
+}
+
+function reactionMatches(reaction: MessageReaction, configuredEmoji: string): boolean {
+  return (
+    reaction.emoji.name === configuredEmoji ||
+    reaction.emoji.id === configuredEmoji ||
+    reaction.emoji.toString() === configuredEmoji
+  );
+}
+
+function makeNickname(application: Application): string {
+  const nickname = `${application.firstName} ${application.lastName} | ${application.memberId}`;
+  return nickname.length <= 32 ? nickname : nickname.slice(0, 32);
+}
+
+function createCommands() {
+  return [
+    {
+      name: commandNames.setup,
+      description: "Podesi poruku, emoji i kanale za prijave",
+      options: [
+        {
+          type: 3,
+          name: "message_id",
+          description: "ID poruke za prijavu",
+          required: true,
+        },
+        {
+          type: 7,
+          name: "target_channel",
+          description: "Kanal u kome se nalazi poruka",
+          required: true,
+          channel_types: [ChannelType.GuildText, ChannelType.GuildAnnouncement],
+        },
+        {
+          type: 7,
+          name: "hc_channel",
+          description: "Kanal u koji stižu prijave za potvrdu",
+          required: true,
+          channel_types: [ChannelType.GuildText, ChannelType.GuildAnnouncement],
+        },
+        {
+          type: 7,
+          name: "log_channel",
+          description: "Kanal u koji se zapisuju odobrene i odbijene prijave",
+          required: true,
+          channel_types: [ChannelType.GuildText, ChannelType.GuildAnnouncement],
+        },
+        {
+          type: 3,
+          name: "emoji",
+          description: "Emoji za prijavu, na primer ✅",
+          required: false,
+          max_length: 100,
+        },
+      ],
+    },
+    {
+      name: commandNames.addRank,
+      description: "Poveži broj ranka sa Discord rolom",
+      options: [
+        {
+          type: 4,
+          name: "rank",
+          description: "Broj ranka od 1 do 10",
+          required: true,
+          min_value: 1,
+          max_value: 10,
+        },
+        {
+          type: 8,
+          name: "role",
+          description: "Discord rola za ovaj rank",
+          required: true,
+        },
+      ],
+    },
+    {
+      name: commandNames.removeRank,
+      description: "Obriši podešavanje za rank",
+      options: [
+        {
+          type: 4,
+          name: "rank",
+          description: "Broj ranka od 1 do 10",
+          required: true,
+          min_value: 1,
+          max_value: 10,
+        },
+      ],
+    },
+    {
+      name: commandNames.listRanks,
+      description: "Prikaži podešene rankove",
+    },
+    {
+      name: commandNames.addHcRole,
+      description: "Dozvoli roli da potvrđuje i odbija prijave",
+      options: [
+        {
+          type: 8,
+          name: "role",
+          description: "HC rola",
+          required: true,
+        },
+      ],
+    },
+    {
+      name: commandNames.removeHcRole,
+      description: "Ukloni rolu iz HC dozvola",
+      options: [
+        {
+          type: 8,
+          name: "role",
+          description: "HC rola",
+          required: true,
+        },
+      ],
+    },
+    {
+      name: commandNames.listHcRoles,
+      description: "Prikaži role koje mogu obrađivati prijave",
+    },
+    {
+      name: commandNames.status,
+      description: "Prikaži trenutno podešavanje verifikacije",
+    },
+    {
+      name: commandNames.copyRole,
+      description: "Kopiraj sve dostupne postavke sa jedne role na drugu",
+      options: [
+        {
+          type: 8,
+          name: "source_role",
+          description: "Rola sa koje se kopiraju postavke",
+          required: true,
+        },
+        {
+          type: 8,
+          name: "target_role",
+          description: "Rola na koju se kopiraju postavke",
+          required: true,
+        },
+      ],
+    },
+  ];
+}
+
+async function handleSetup(interaction: ChatInputCommandInteraction): Promise<void> {
+  if (!isApplicationStaff(interaction)) {
+    await interaction.reply({ content: "Ovu komandu mogu koristiti samo HC/admini.", ephemeral: true });
+    return;
+  }
+
+  const messageId = interaction.options.getString("message_id", true);
+  const targetChannel = interaction.options.getChannel("target_channel", true);
+  const hcChannel = interaction.options.getChannel("hc_channel", true);
+  const logChannel = interaction.options.getChannel("log_channel", true);
+  const emoji = interaction.options.getString("emoji")?.trim() || "✅";
+
+  if (
+    ![ChannelType.GuildText, ChannelType.GuildAnnouncement].includes(targetChannel.type) ||
+    ![ChannelType.GuildText, ChannelType.GuildAnnouncement].includes(hcChannel.type) ||
+    ![ChannelType.GuildText, ChannelType.GuildAnnouncement].includes(logChannel.type)
+  ) {
+    await interaction.reply({ content: "Izaberi tekstualne kanale.", ephemeral: true });
+    return;
+  }
+
+  if (!("messages" in targetChannel)) {
+    await interaction.reply({ content: "Izabrani kanal ne može sadržati poruke.", ephemeral: true });
+    return;
+  }
+
+  try {
+    const message = await targetChannel.messages.fetch(messageId);
+    await message.react(emoji);
+  } catch {
+    await interaction.reply({
+      content: `Ne mogu da pronađem poruku ili dodam ${emoji} reakciju. Proveri ID i dozvole bota.`,
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const config = getGuildConfig(interaction.guildId!);
+  config.targetChannelId = targetChannel.id;
+  config.targetMessageId = messageId;
+  config.hcChannelId = hcChannel.id;
+  config.logChannelId = logChannel.id;
+  config.reactionEmoji = emoji;
+  await saveState();
+
+  await interaction.reply({
+    content:
+      `Podešeno. Kandidati reaguju sa ${emoji} na poruku <#${targetChannel.id}> (\`${messageId}\`), prijave idu u <#${hcChannel.id}>, a log u <#${logChannel.id}>.`,
+    ephemeral: true,
+  });
+}
+
+async function handleAddRank(interaction: ChatInputCommandInteraction): Promise<void> {
+  if (!isApplicationStaff(interaction)) {
+    await interaction.reply({ content: "Ovu komandu mogu koristiti samo HC/admini.", ephemeral: true });
+    return;
+  }
+
+  const rank = interaction.options.getInteger("rank", true);
+  const role = interaction.options.getRole("role", true);
+  const config = getGuildConfig(interaction.guildId!);
+  const existing = getRankRole(config, rank);
+
+  if (existing) {
+    existing.roleId = role.id;
+  } else {
+    config.rankRoles.push({ rank, roleId: role.id });
+  }
+  config.rankRoles.sort((a, b) => a.rank - b.rank);
+  await saveState();
+
+  await interaction.reply({
+    content: `Rank ${rank} je sada povezan sa rolom ${role}.`,
+    ephemeral: true,
+  });
+}
+
+async function handleRemoveRank(interaction: ChatInputCommandInteraction): Promise<void> {
+  if (!isApplicationStaff(interaction)) {
+    await interaction.reply({ content: "Ovu komandu mogu koristiti samo HC/admini.", ephemeral: true });
+    return;
+  }
+
+  const rank = interaction.options.getInteger("rank", true);
+  const config = getGuildConfig(interaction.guildId!);
+  const before = config.rankRoles.length;
+  config.rankRoles = config.rankRoles.filter((entry) => entry.rank !== rank);
+  await saveState();
+
+  await interaction.reply({
+    content: before === config.rankRoles.length
+      ? `Rank ${rank} nije bio podešen.`
+      : `Podešavanje za rank ${rank} je obrisano.`,
+    ephemeral: true,
+  });
+}
+
+async function handleListRanks(interaction: ChatInputCommandInteraction): Promise<void> {
+  if (!isApplicationStaff(interaction)) {
+    await interaction.reply({ content: "Ovu komandu mogu koristiti samo HC/admini.", ephemeral: true });
+    return;
+  }
+
+  const config = getGuildConfig(interaction.guildId!);
+  if (config.rankRoles.length === 0) {
+    await interaction.reply({ content: "Nema podešenih rankova. Koristi `/rank-add`.", ephemeral: true });
+    return;
+  }
+
+  await interaction.reply({
+    content: config.rankRoles
+      .map((entry) => `Rank ${entry.rank} → <@&${entry.roleId}>`)
+      .join("\n"),
+    ephemeral: true,
+  });
+}
+
+async function handleAddHcRole(interaction: ChatInputCommandInteraction): Promise<void> {
+  if (!isApplicationStaff(interaction)) {
+    await interaction.reply({ content: "Ovu komandu mogu koristiti samo administratori.", ephemeral: true });
+    return;
+  }
+
+  const role = interaction.options.getRole("role", true);
+  const config = getGuildConfig(interaction.guildId!);
+  if (!config.hcRoleIds.includes(role.id)) {
+    config.hcRoleIds.push(role.id);
+    await saveState();
+  }
+
+  await interaction.reply({
+    content: `${role} sada može da potvrđuje i odbija prijave.`,
+    ephemeral: true,
+  });
+}
+
+async function handleRemoveHcRole(interaction: ChatInputCommandInteraction): Promise<void> {
+  if (!isApplicationStaff(interaction)) {
+    await interaction.reply({ content: "Ovu komandu mogu koristiti samo administratori.", ephemeral: true });
+    return;
+  }
+
+  const role = interaction.options.getRole("role", true);
+  const config = getGuildConfig(interaction.guildId!);
+  const before = config.hcRoleIds.length;
+  config.hcRoleIds = config.hcRoleIds.filter((roleId) => roleId !== role.id);
+  await saveState();
+
+  await interaction.reply({
+    content: before === config.hcRoleIds.length
+      ? `${role} nije bila podešena kao HC rola.`
+      : `${role} više ne može da obrađuje prijave.`,
+    ephemeral: true,
+  });
+}
+
+async function handleListHcRoles(interaction: ChatInputCommandInteraction): Promise<void> {
+  if (!isApplicationStaff(interaction)) {
+    await interaction.reply({ content: "Ovu komandu mogu koristiti samo administratori.", ephemeral: true });
+    return;
+  }
+
+  const config = getGuildConfig(interaction.guildId!);
+  await interaction.reply({
+    content: config.hcRoleIds.length > 0
+      ? config.hcRoleIds.map((roleId) => `<@&${roleId}>`).join("\n")
+      : "Nema posebno podešenih HC rola. Administratori sa Manage Server dozvolom i dalje mogu obrađivati prijave.",
+    ephemeral: true,
+  });
+}
+
+async function handleStatus(interaction: ChatInputCommandInteraction): Promise<void> {
+  if (!isApplicationStaff(interaction)) {
+    await interaction.reply({ content: "Ovu komandu mogu koristiti samo HC/admini.", ephemeral: true });
+    return;
+  }
+
+  const config = getGuildConfig(interaction.guildId!);
+  const pending = Object.values(state.applications).filter(
+    (application) => application.guildId === interaction.guildId && application.status === "pending",
+  ).length;
+
+  await interaction.reply({
+    content: [
+      `Poruka za reakciju: ${config.targetMessageId ? `<#${config.targetChannelId}> / \`${config.targetMessageId}\`` : "nije podešena"}`,
+      `HC kanal: ${config.hcChannelId ? `<#${config.hcChannelId}>` : "nije podešen"}`,
+      `Log kanal: ${config.logChannelId ? `<#${config.logChannelId}>` : "nije podešen"}`,
+      `Emoji: ${config.reactionEmoji}`,
+      `Podešenih rankova: ${config.rankRoles.length}/10`,
+      `HC rola: ${config.hcRoleIds.length > 0 ? config.hcRoleIds.map((roleId) => `<@&${roleId}>`).join(", ") : "samo administratori"}`,
+      `Prijava na čekanju: ${pending}`,
+    ].join("\n"),
+    ephemeral: true,
+  });
+}
+
+async function handleCopyRoleCommand(interaction: ChatInputCommandInteraction): Promise<void> {
+  if (!canUseHcCommand(interaction)) {
+    await interaction.reply({
+      content: "Ovu komandu mogu koristiti samo administratori ili podešene HC role.",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const guild = interaction.guild;
+  if (!guild) {
+    await interaction.reply({ content: "Ova komanda se može koristiti samo na serveru.", ephemeral: true });
+    return;
+  }
+
+  const sourceRoleOption = interaction.options.getRole("source_role", true);
+  const targetRoleOption = interaction.options.getRole("target_role", true);
+  const sourceRole = await guild.roles.fetch(sourceRoleOption.id);
+  const targetRole = await guild.roles.fetch(targetRoleOption.id);
+  if (!sourceRole || !targetRole) {
+    await interaction.reply({ content: "Source ili Target Role više ne postoji.", ephemeral: true });
+    return;
+  }
+
+  if (sourceRole.id === targetRole.id) {
+    await interaction.reply({
+      content: "Source Role i Target Role moraju biti različite role.",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  if (sourceRole.id === interaction.guildId || targetRole.id === interaction.guildId) {
+    await interaction.reply({
+      content: "Defaultna @everyone rola ne može biti source ili target.",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  if (targetRole.managed || !targetRole.editable) {
+    await interaction.reply({
+      content: "Bot ne može menjati Target Role. Proveri da target nije managed rola i da je botova rola iznad nje.",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  await interaction.reply({
+    content: [
+      `**Source Role:** ${sourceRole}`,
+      `**Target Role:** ${targetRole}`,
+      "",
+      "Kopiraće se naziv, permissions, boja, hoist, mentionable, icon/unicode emoji i sve channel/category dozvole koje Discord API dopušta.",
+      "Klikni dugme tek kada proveriš oba rolea.",
+    ].join("\n"),
+    components: [copyRoleButton(sourceRole.id, targetRole.id)],
+    ephemeral: true,
+  });
+}
+
+function buildPermissionOverwriteOptions(overwrite: PermissionOverwrites): PermissionOverwriteOptions {
+  const options: Record<string, boolean | null> = {};
+  for (const permission of Object.keys(PermissionFlagsBits) as Array<keyof typeof PermissionFlagsBits>) {
+    options[permission] = overwrite.allow.has(permission)
+      ? true
+      : overwrite.deny.has(permission)
+        ? false
+        : null;
+  }
+  return options as PermissionOverwriteOptions;
+}
+
+async function copyRoleSettings(
+  sourceRole: Role,
+  targetRole: Role,
+): Promise<{ copiedOverwrites: number; removedOverwrites: number; failedOverwrites: number }> {
+  const sourceIconUrl = sourceRole.iconURL({ extension: "png", size: 256 });
+  await targetRole.edit({
+    name: sourceRole.name,
+    colors: {
+      primaryColor: sourceRole.colors.primaryColor,
+      secondaryColor: sourceRole.colors.secondaryColor,
+      tertiaryColor: sourceRole.colors.tertiaryColor,
+    },
+    hoist: sourceRole.hoist,
+    mentionable: sourceRole.mentionable,
+    permissions: sourceRole.permissions,
+    icon: sourceIconUrl,
+    unicodeEmoji: sourceRole.unicodeEmoji,
+    reason: `Copy role settings from ${sourceRole.id}`,
+  });
+
+  const channels = await sourceRole.guild.channels.fetch();
+  let copiedOverwrites = 0;
+  let removedOverwrites = 0;
+  let failedOverwrites = 0;
+
+  for (const channel of channels.values()) {
+    if (!channel || !("permissionOverwrites" in channel)) continue;
+
+    const sourceOverwrite = channel.permissionOverwrites.cache.get(sourceRole.id);
+    const targetOverwrite = channel.permissionOverwrites.cache.get(targetRole.id);
+    if (!sourceOverwrite && !targetOverwrite) continue;
+
+    try {
+      if (sourceOverwrite) {
+        await channel.permissionOverwrites.edit(
+          targetRole.id,
+          buildPermissionOverwriteOptions(sourceOverwrite),
+          { reason: `Copy channel permissions from ${sourceRole.id}` },
+        );
+        copiedOverwrites += 1;
+      } else {
+        await channel.permissionOverwrites.delete(
+          targetRole.id,
+          `Remove target overwrite because source role has none`,
+        );
+        removedOverwrites += 1;
+      }
+    } catch (error) {
+      failedOverwrites += 1;
+      logger.warn(
+        { err: error, channelId: channel.id, sourceRoleId: sourceRole.id, targetRoleId: targetRole.id },
+        "Could not copy role channel permissions",
+      );
+    }
+  }
+
+  return { copiedOverwrites, removedOverwrites, failedOverwrites };
+}
+
+async function handleCopyRoleButton(interaction: ButtonInteraction): Promise<void> {
+  if (!canUseHcCommand(interaction)) {
+    await interaction.reply({
+      content: "Ovu komandu mogu koristiti samo administratori ili podešene HC role.",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const [, sourceRoleId, targetRoleId] = interaction.customId.split(":");
+  const guild = interaction.guild;
+  if (!guild || !sourceRoleId || !targetRoleId) {
+    await interaction.reply({ content: "Server ili role nisu dostupni.", ephemeral: true });
+    return;
+  }
+
+  const sourceRole = await guild.roles.fetch(sourceRoleId);
+  const targetRole = await guild.roles.fetch(targetRoleId);
+  if (!sourceRole || !targetRole) {
+    await interaction.reply({ content: "Source ili Target Role više ne postoji.", ephemeral: true });
+    return;
+  }
+  if (sourceRole.id === targetRole.id) {
+    await interaction.reply({ content: "Source Role i Target Role moraju biti različite role.", ephemeral: true });
+    return;
+  }
+  if (targetRole.managed || !targetRole.editable) {
+    await interaction.reply({
+      content: "Bot ne može menjati Target Role. Proveri da target nije managed rola i da je botova rola iznad nje.",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const botMember = await guild.members.fetchMe();
+  if (!botMember.permissions.has(PermissionFlagsBits.ManageRoles)) {
+    await interaction.reply({
+      content: "Bot nema Manage Roles dozvolu, pa ne može kopirati postavke role.",
+      ephemeral: true,
+    });
+    return;
+  }
+  if (!botMember.permissions.has(PermissionFlagsBits.ManageChannels)) {
+    await interaction.reply({
+      content: "Bot nema Manage Channels dozvolu, pa ne može kopirati channel/category permissions.",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  await interaction.update({
+    content: `Kopiram sve postavke sa ${sourceRole} na ${targetRole}...`,
+    components: [copyRoleButton(sourceRole.id, targetRole.id, true)],
+  });
+
+  try {
+    const result = await copyRoleSettings(sourceRole, targetRole);
+    const channelWarning = result.failedOverwrites > 0
+      ? `\nUpozorenje: ${result.failedOverwrites} channel/category dozvola nije mogla biti kopirana.`
+      : "";
+
+    await interaction.editReply({
+      content: [
+        "✅ **Role uspješno kopiran!**",
+        "",
+        `Source: ${sourceRole}`,
+        `Target: ${targetRole}`,
+        "Kopirano: sve dostupne postavke",
+        `Channel/category dozvole: ${result.copiedOverwrites} kopirano, ${result.removedOverwrites} uklonjeno.${channelWarning}`,
+      ].join("\n"),
+      components: [],
+    });
+  } catch (error) {
+    logger.error(
+      { err: error, sourceRoleId: sourceRole.id, targetRoleId: targetRole.id },
+      "Could not copy role settings",
+    );
+    await interaction.editReply({
+      content: [
+        "❌ **Kopiranje role nije uspelo.**",
+        "",
+        `Source: ${sourceRole}`,
+        `Target: ${targetRole}`,
+        "Proveri da bot ima Manage Roles i Manage Channels, te da je botova rola iznad Target Role.",
+      ].join("\n"),
+      components: [],
+    });
+  }
+}
+
+async function handleChatCommand(interaction: ChatInputCommandInteraction): Promise<void> {
+  switch (interaction.commandName) {
+    case commandNames.setup:
+      await handleSetup(interaction);
+      break;
+    case commandNames.addRank:
+      await handleAddRank(interaction);
+      break;
+    case commandNames.removeRank:
+      await handleRemoveRank(interaction);
+      break;
+    case commandNames.listRanks:
+      await handleListRanks(interaction);
+      break;
+    case commandNames.addHcRole:
+      await handleAddHcRole(interaction);
+      break;
+    case commandNames.removeHcRole:
+      await handleRemoveHcRole(interaction);
+      break;
+    case commandNames.listHcRoles:
+      await handleListHcRoles(interaction);
+      break;
+    case commandNames.status:
+      await handleStatus(interaction);
+      break;
+    case commandNames.copyRole:
+      await handleCopyRoleCommand(interaction);
+      break;
+    default:
+      break;
+  }
+}
+
+async function handleReaction(
+  reaction: MessageReaction | PartialMessageReaction,
+  user: User | PartialUser,
+): Promise<void> {
+  const fullUser = user.partial ? await user.fetch() : user;
+  if (fullUser.bot) return;
+  const fullReaction = reaction.partial ? await reaction.fetch() : reaction;
+
+  const message = fullReaction.message;
+  const guild = message.guild;
+  if (!guild) return;
+
+  const config = state.guilds[guild.id];
+  if (
+    !config ||
+    config.targetMessageId !== message.id ||
+    !reactionMatches(fullReaction, config.reactionEmoji ?? "✅")
+  ) {
+    return;
+  }
+
+  const existing = Object.values(state.applications).find(
+    (application) =>
+      application.guildId === guild.id &&
+      application.applicantId === fullUser.id &&
+      application.status === "pending",
+  );
+  if (existing) {
+    await fullUser.send("Već imaš prijavu koja čeka potvrdu HC-a.").catch(() => undefined);
+    return;
+  }
+
+  await fullReaction.users.remove(fullUser.id).catch(() => undefined);
+  try {
+    await fullUser.send(applicationPrompt(guild.id, config));
+  } catch {
+    const channel = message.channel;
+    if (channel.isTextBased() && "send" in channel) {
+      const prompt = await channel.send({
+        content: `<@${fullUser.id}> Ne mogu da ti pošaljem DM. Klikni dugme ispod za privatnu prijavu.`,
+        components: applicationPrompt(guild.id, config).components,
+      });
+      setTimeout(() => {
+        void prompt.delete().catch(() => undefined);
+      }, 60_000);
+    }
+  }
+}
+
+function extractDiscordUserId(value: string): string | undefined {
+  const mention = value.match(/^<@!?(\d+)>$/);
+  if (mention) return mention[1];
+  return /^\d+$/.test(value) ? value : undefined;
+}
+
+async function handleApplicationSubmit(interaction: ModalSubmitInteraction) {
+  const [, guildId, rankValue] = interaction.customId.split(":");
+  const guild = client.guilds.cache.get(guildId);
+  const config = guildId ? state.guilds[guildId] : undefined;
+  if (!guild || !config?.hcChannelId) {
+    await interaction.reply({ content: "Verifikacija trenutno nije podešena.", ephemeral: true });
+    return;
+  }
+
+  const firstName = interaction.fields.getTextInputValue("first_name").trim();
+  const lastName = interaction.fields.getTextInputValue("last_name").trim();
+  const memberId = interaction.fields.getTextInputValue("member_id").trim();
+  const invitedByValue = interaction.fields.getTextInputValue("invited_by").trim();
+  const invitedById = extractDiscordUserId(invitedByValue);
+  const rank = Number(rankValue);
+
+  if (
+    !firstName ||
+    !lastName ||
+    !memberId ||
+    !invitedById ||
+    !Number.isInteger(rank) ||
+    rank < 1 ||
+    rank > 10
+  ) {
+    await interaction.reply({
+      content: "Proveri podatke. Rank je izabran iz menija, a osobu koja te je ubacila unesi kao Discord mention ili ID.",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const rankRole = getRankRole(config, rank);
+  if (!rankRole) {
+    await interaction.reply({
+      content: `Rank ${rank} još nije podešen na serveru. Javi se HC-u.`,
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const invitedByMember = await guild.members.fetch(invitedById).catch(() => undefined);
+  if (!invitedByMember) {
+    await interaction.reply({
+      content: "Ne mogu da pronađem osobu koja te je ubacila na ovom serveru. Koristi njen Discord mention ili tačan ID.",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const duplicateMemberId = Object.values(state.applications).find(
+    (application) =>
+      application.guildId === guildId &&
+      application.memberId.toLowerCase() === memberId.toLowerCase() &&
+      application.status !== "rejected",
+  );
+  if (duplicateMemberId) {
+    await interaction.reply({
+      content: "Ovaj ID već postoji u aktivnoj ili potvrđenoj prijavi. Proveri podatke sa HC-om.",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const hasPending = Object.values(state.applications).some(
+    (application) =>
+      application.guildId === guildId &&
+      application.applicantId === interaction.user.id &&
+      application.status === "pending",
+  );
+  if (hasPending) {
+    await interaction.reply({ content: "Već imaš prijavu koja čeka potvrdu HC-a.", ephemeral: true });
+    return;
+  }
+
+  const application: Application = {
+    id: `app-${Date.now()}-${interaction.user.id.slice(-4)}`,
+    guildId,
+    applicantId: interaction.user.id,
+    firstName,
+    lastName,
+    memberId,
+    rank,
+    invitedBy: `<@${invitedByMember.id}>`,
+    invitedById: invitedByMember.id,
+    status: "pending",
+    createdAt: new Date().toISOString(),
+  };
+  state.applications[application.id] = application;
+
+  const hcChannel = await guild.channels.fetch(config.hcChannelId);
+  if (!hcChannel?.isTextBased() || !("send" in hcChannel)) {
+    delete state.applications[application.id];
+    await interaction.reply({ content: "HC kanal nije dostupan. Javi se administratoru.", ephemeral: true });
+    return;
+  }
+
+  const roleMention = `<@&${rankRole.roleId}>`;
+  let approvalMessage;
+  try {
+    approvalMessage = await hcChannel.send({
+      embeds: [applicationEmbed(application, `<@${interaction.user.id}>`, roleMention)],
+      components: [applicationButtons(application.id)],
+    });
+  } catch {
+    delete state.applications[application.id];
+    await saveState();
+    await interaction.reply({
+      content: "Ne mogu da pošaljem prijavu u HC kanal. Proveri dozvole bota i pokušaj ponovo.",
+      ephemeral: true,
+    });
+    return;
+  }
+  application.approvalMessageId = approvalMessage.id;
+  await saveState();
+
+  await interaction.reply({
+    content: "Prijava je poslata HC-u na potvrdu. Sačekaj odgovor.",
+    ephemeral: true,
+  });
+}
+
+async function sendApplicationLog(
+  guild: Guild,
+  config: GuildConfig,
+  application: Application,
+  roleMention: string,
+): Promise<void> {
+  const channelId = config.logChannelId ?? config.hcChannelId;
+  if (!channelId) return;
+  const channel = await guild.channels.fetch(channelId).catch(() => undefined);
+  if (!channel?.isTextBased() || !("send" in channel)) return;
+
+  await channel.send({
+    embeds: [
+      applicationEmbed(application, `<@${application.applicantId}>`, roleMention)
+        .setTitle(`Log prijave — ${application.status === "approved" ? "POTVRĐENO" : "ODBIJENO"}`),
+    ],
+  });
+}
+
+async function getApplicationFromButton(interaction: ButtonInteraction): Promise<Application | undefined> {
+  const [, applicationId] = interaction.customId.split(":");
+  return state.applications[applicationId];
+}
+
+async function handleApproval(
+  interaction: ButtonInteraction,
+  application: Application,
+): Promise<void> {
+  if (application.status !== "pending") {
+    await interaction.reply({ content: "Ova prijava je već rešena.", ephemeral: true });
+    return;
+  }
+
+  const guild = interaction.guild;
+  if (!guild) {
+    await interaction.reply({ content: "Server nije dostupan.", ephemeral: true });
+    return;
+  }
+  const config = getGuildConfig(guild.id);
+  if (!canProcessApplications(interaction, config)) {
+    await interaction.reply({ content: "Samo podešene HC role i administratori mogu potvrditi prijavu.", ephemeral: true });
+    return;
+  }
+  const rankRole = getRankRole(config, application.rank);
+  if (!rankRole) {
+    await interaction.reply({ content: `Rank ${application.rank} više nije podešen.`, ephemeral: true });
+    return;
+  }
+
+  const role = await guild.roles.fetch(rankRole.roleId);
+  const member = await guild.members.fetch(application.applicantId).catch(() => undefined);
+  if (!role || !member) {
+    await interaction.reply({
+      content: "Ne mogu da pronađem rolu ili člana. Proveri da li je bot iznad rank role.",
+      ephemeral: true,
+    });
+    return;
+  }
+  if (!role.editable) {
+    await interaction.reply({
+      content: "Bot ne može da dodeli ovu rolu. Premesti bot rolu iznad rank role u Discord podešavanjima.",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  await interaction.deferUpdate();
+  await member.roles.add(role);
+  let nicknameApplied = true;
+  try {
+    await member.setNickname(makeNickname(application));
+  } catch (error) {
+    nicknameApplied = false;
+    logger.warn({ err: error, applicationId: application.id }, "Could not set member nickname");
+  }
+
+  application.status = "approved";
+  application.decidedAt = new Date().toISOString();
+  application.decidedBy = interaction.user.id;
+  application.nicknameApplied = nicknameApplied;
+  await saveState();
+
+  await interaction.message.edit({
+    embeds: [
+      applicationEmbed(
+        application,
+        `<@${application.applicantId}>`,
+        `<@&${rankRole.roleId}>`,
+      ).addFields({
+        name: "Potvrdio",
+        value: `<@${interaction.user.id}>`,
+        inline: true,
+      }),
+    ],
+    components: [applicationButtons(application.id, true)],
+  });
+  await sendApplicationLog(guild, config, application, `<@&${rankRole.roleId}>`);
+
+  await client.users.fetch(application.applicantId)
+    .then((user) =>
+      user.send(
+        nicknameApplied
+          ? `HC je odobrio tvoju prijavu. Dodeljen ti je rank ${application.rank}.`
+          : `HC je odobrio tvoju prijavu i dodeljen ti je rank ${application.rank}, ali nadimak nije mogao automatski da se promeni.`,
+      ),
+    )
+    .catch(() => undefined);
+
+  if (!nicknameApplied) {
+    await interaction.followUp({
+      content: "Prijava je odobrena i rola je dodeljena, ali nadimak nije promenjen zbog Discord dozvola.",
+      ephemeral: true,
+    });
+  }
+}
+
+async function handleRejection(
+  interaction: ButtonInteraction | ModalSubmitInteraction,
+  application: Application,
+  reason = "",
+): Promise<void> {
+  if (application.status !== "pending") {
+    await interaction.reply({ content: "Ova prijava je već rešena.", ephemeral: true });
+    return;
+  }
+  const guild = interaction.guild;
+  if (!guild) {
+    await interaction.reply({ content: "Server nije dostupan.", ephemeral: true });
+    return;
+  }
+  const config = getGuildConfig(guild.id);
+  if (!canProcessApplications(interaction, config)) {
+    await interaction.reply({ content: "Samo podešene HC role i administratori mogu odbiti prijavu.", ephemeral: true });
+    return;
+  }
+
+  application.status = "rejected";
+  application.decidedAt = new Date().toISOString();
+  application.decidedBy = interaction.user.id;
+  application.rejectionReason = reason || undefined;
+  await saveState();
+
+  const rankRole = getRankRole(config, application.rank);
+  const rejectedEmbed = applicationEmbed(
+    application,
+    `<@${application.applicantId}>`,
+    rankRole ? `<@&${rankRole.roleId}>` : "Nije podešeno",
+  ).addFields({
+    name: "Odbio",
+    value: `<@${interaction.user.id}>`,
+    inline: true,
+  });
+
+  if (interaction.isButton()) {
+    await interaction.update({
+      embeds: [rejectedEmbed],
+      components: [applicationButtons(application.id, true)],
+    });
+  } else {
+    await interaction.reply({ content: "Prijava je odbijena i evidentirana.", ephemeral: true });
+    await interaction.message?.edit({
+      embeds: [rejectedEmbed],
+      components: [applicationButtons(application.id, true)],
+    }).catch(() => undefined);
+  }
+  await sendApplicationLog(guild, config, application, rankRole ? `<@&${rankRole.roleId}>` : "Nije podešeno");
+
+  await client.users.fetch(application.applicantId)
+    .then((user) => user.send("HC je odbio tvoju prijavu. Za više informacija obrati se HC-u."))
+    .catch(() => undefined);
+}
+
+async function handleRankSelect(interaction: StringSelectMenuInteraction): Promise<void> {
+  const [, guildId] = interaction.customId.split(":");
+  const rank = Number(interaction.values[0]);
+  const config = state.guilds[guildId];
+  if (!config || !getRankRole(config, rank)) {
+    await interaction.reply({ content: "Ovaj rank više nije dostupan.", ephemeral: true });
+    return;
+  }
+  await interaction.update(buildSelectedRankPrompt(guildId, rank));
+}
+
+async function handleButton(interaction: ButtonInteraction): Promise<void> {
+  if (interaction.customId.startsWith("copy_role:")) {
+    await handleCopyRoleButton(interaction);
+    return;
+  }
+
+  if (interaction.customId.startsWith("open_application:")) {
+    const [, guildId, rankValue] = interaction.customId.split(":");
+    const rank = Number(rankValue);
+    const config = state.guilds[guildId];
+    if (!config || !getRankRole(config, rank)) {
+      await interaction.reply({ content: "Ovaj rank više nije dostupan.", ephemeral: true });
+      return;
+    }
+    await interaction.showModal(buildApplicationModal(guildId, rank));
+    return;
+  }
+
+  if (interaction.customId.startsWith("approve_application:")) {
+    const application = await getApplicationFromButton(interaction);
+    if (application) {
+      await handleApproval(interaction, application);
+    } else {
+      await interaction.reply({ content: "Prijava ne postoji ili je obrisana.", ephemeral: true });
+    }
+    return;
+  }
+
+  if (interaction.customId.startsWith("reject_application:")) {
+    const application = await getApplicationFromButton(interaction);
+    if (application) {
+      const config = interaction.guildId ? state.guilds[interaction.guildId] : undefined;
+      if (!canProcessApplications(interaction, config)) {
+        await interaction.reply({ content: "Samo podešene HC role i administratori mogu odbiti prijavu.", ephemeral: true });
+        return;
+      }
+      await interaction.showModal(buildRejectionModal(application.id));
+    } else {
+      await interaction.reply({ content: "Prijava ne postoji ili je obrisana.", ephemeral: true });
+    }
+  }
+}
+
+client.once(Events.ClientReady, async (readyClient) => {
+  for (const guild of readyClient.guilds.cache.values()) {
+    await guild.commands.set(createCommands());
+  }
+  logger.info({ user: readyClient.user.tag, guilds: readyClient.guilds.cache.size }, "Discord bot ready");
+});
+
+client.on(Events.InteractionCreate, async (interaction) => {
+  try {
+    if (interaction.isChatInputCommand()) {
+      await handleChatCommand(interaction);
+    } else if (interaction.isStringSelectMenu()) {
+      if (interaction.customId.startsWith("choose_rank:")) {
+        await handleRankSelect(interaction);
+      }
+    } else if (interaction.isButton()) {
+      await handleButton(interaction);
+    } else if (interaction.isModalSubmit()) {
+      if (interaction.customId.startsWith("submit_application:")) {
+        await handleApplicationSubmit(interaction);
+      } else if (interaction.customId.startsWith("reject_reason:")) {
+        const [, applicationId] = interaction.customId.split(":");
+        const application = state.applications[applicationId];
+        if (!application) {
+          await interaction.reply({ content: "Prijava ne postoji ili je obrisana.", ephemeral: true });
+        } else {
+          const reason = interaction.fields.getTextInputValue("reason").trim();
+          await handleRejection(interaction, application, reason);
+        }
+      }
+    }
+  } catch (error) {
+    logger.error({ err: error, interactionId: interaction.id }, "Discord interaction failed");
+    if (interaction.isRepliable()) {
+      if (interaction.deferred) {
+        await interaction.followUp({ content: "Došlo je do greške. Pokušaj ponovo ili javi administratoru.", ephemeral: true })
+          .catch(() => undefined);
+      } else if (!interaction.replied) {
+        await interaction.reply({ content: "Došlo je do greške. Pokušaj ponovo ili javi administratoru.", ephemeral: true })
+          .catch(() => undefined);
+      }
+    }
+  }
+});
+
+client.on(Events.MessageReactionAdd, (reaction, user) => {
+  void handleReaction(reaction, user).catch((error) => {
+    logger.error({ err: error }, "Discord reaction handling failed");
+  });
+});
+
+export async function startDiscordBot(): Promise<void> {
+  const token = process.env["DISCORD_BOT_TOKEN"];
+  if (!token) {
+    throw new Error("DISCORD_BOT_TOKEN is required to start the Discord bot.");
+  }
+
+  await client.login(token);
+}

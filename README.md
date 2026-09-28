@@ -1,0 +1,163 @@
+# Discord HC Verification Bot
+
+Discord bot za automatski prijem članova, izbor ranka, HC potvrdu i dodelu role.
+
+## Funkcije
+
+- Kandidat reaguje na podešenu poruku i dobija privatni DM tok.
+- Rank se bira kroz Discord Select Menu.
+- Kandidat unosi ime, prezime, ID i Discord mention/ID osobe koja ga je ubacila.
+- HC dobija prijavu sa dugmadima za odobrenje ili odbijanje.
+- Odbijanje podržava opcionalan razlog.
+- Odobrenje dodeljuje rank rolu i postavlja nadimak u formatu `Ime Prezime | ID`.
+- Aktivne i potvrđene duple prijave sa istim ID-jem se blokiraju.
+- Sve odluke se zapisuju u poseban log kanal.
+- `/copy-role` kopira dostupne role postavke i channel/category overwrite dozvole nakon potvrde.
+
+## Zahtevi
+
+- Node.js 24
+- pnpm
+- Discord bot aplikacija sa tokenom
+
+## Pokretanje
+
+1. Instaliraj zavisnosti:
+
+   ```bash
+   pnpm install
+   ```
+
+2. Kopiraj `.env.example` u `.env` i upiši Discord bot token:
+
+   ```bash
+   cp .env.example .env
+   ```
+
+   U Replit-u koristi Secret naziva `DISCORD_BOT_TOKEN` umesto `.env` fajla. Stvarni token nikada ne commituj na GitHub.
+
+3. Pokreni server:
+
+   ```bash
+   pnpm --filter @workspace/api-server run dev
+   ```
+
+Server sluša na vrednosti `PORT` varijable i health endpoint je dostupan na:
+
+```text
+/api/healthz
+```
+
+## Discord bot dozvole
+
+Botu su potrebne sledeće dozvole:
+
+- View Channel
+- Send Messages
+- Read Message History
+- Add Reactions
+- Embed Links
+- Manage Roles
+- Manage Channels
+- Manage Nicknames
+- Use Application Commands
+
+Botova najviša rola mora biti iznad svih rank rola koje dodeljuje ili menja. Za `/copy-role` target rola ne sme biti managed/integration rola.
+
+Gateway intents koje bot koristi:
+
+- `Guilds`
+- `GuildMessageReactions`
+
+Privileged `Guild Members` intent nije potreban.
+
+## Komande
+
+### Podešavanje prijava
+
+```text
+/verification-setup
+```
+
+Komanda traži:
+
+- `message_id` — ID poruke na koju kandidati reaguju
+- `target_channel` — kanal u kojem se poruka nalazi
+- `hc_channel` — kanal za nove prijave
+- `log_channel` — kanal za odluke
+- `emoji` — opcionalni emoji, podrazumevano `✅`
+
+### Rankovi
+
+```text
+/rank-add rank:1 role:@Rank 1
+/rank-remove rank:1
+/rank-list
+```
+
+Rankovi su podržani od 1 do 10.
+
+### HC dozvole
+
+```text
+/hc-role-add role:@HC
+/hc-role-remove role:@HC
+/hc-role-list
+```
+
+Administratori i podešene HC role mogu obrađivati prijave.
+
+### Kopiranje role
+
+```text
+/copy-role
+```
+
+Korisnik bira:
+
+- `source_role`
+- `target_role`
+
+Bot prvo prikazuje izabrane role i gumb `✅ Kopiraj sve`. Kopiranje počinje tek nakon klika.
+
+Kopiraju se:
+
+- naziv
+- permissions
+- boja, uključujući podržane napredne role boje
+- hoist
+- mentionable
+- role icon i unicode emoji kada ih Discord API dopušta
+- source role Allow/Deny overwrite dozvole na kanalima i kategorijama
+
+Ako source nema overwrite na kanalu, postojeći target overwrite se uklanja kako bi postavke ostale usklađene. Hijerarhijska pozicija se ne kopira jer Discord ne može imati dve role na istoj poziciji.
+
+Za ovu komandu bot mora imati `Manage Roles` i `Manage Channels`.
+
+## Stanje prijava
+
+Konfiguracija servera i prijave se čuvaju u:
+
+```text
+artifacts/api-server/data/verification-state.json
+```
+
+Ovaj fajl je lokalni runtime state i namerno se ne uključuje u GitHub paket. Direktorijum se kreira automatski pri prvom korišćenju.
+
+## Provere
+
+```bash
+pnpm run typecheck
+PORT=8081 BASE_PATH=/__mockup pnpm run build
+```
+
+`PORT` i `BASE_PATH` su potrebni za build postojećeg komponentnog preview artifacta kada se projekat builda izvan Replit workflowa.
+
+## Struktura
+
+- `artifacts/api-server/src/discord-bot.ts` — Discord komande, eventovi i verification tok
+- `artifacts/api-server/src/index.ts` — pokretanje Express servera i Discord bota
+- `artifacts/api-server/src/routes/health.ts` — health endpoint
+- `lib/api-spec` i `lib/api-zod` — API specifikacija i generisani tipovi
+- `artifacts/mockup-sandbox` — postojeći komponentni preview artifact
+- `pnpm-lock.yaml` — zaključane verzije zavisnosti
