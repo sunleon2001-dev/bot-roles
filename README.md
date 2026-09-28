@@ -6,7 +6,7 @@ Discord bot za automatski prijem članova, izbor ranka, HC potvrdu i dodelu role
 
 - Kandidat klikne dugme na panelu i dobija privatni Discord prozor za prijavu.
 - Rank se bira kroz privatni Discord Select Menu, bez slanja DM poruka.
-- Nakon izbora ranka otvara se modal za ime, prezime, ID i Discord mention/ID osobe koja ga je ubacila.
+- Nakon izbora ranka otvara se modal za ime, prezime, ID i ime osobe koja ga je ubacila.
 - HC dobija prijavu sa dugmadima za odobrenje ili odbijanje.
 - Odbijanje podržava opcionalan razlog.
 - Odobrenje dodeljuje rank rolu i postavlja nadimak u formatu `Ime Prezime | ID`.

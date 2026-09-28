@@ -14,7 +14,6 @@ import {
   StringSelectMenuBuilder,
   TextInputBuilder,
   TextInputStyle,
-  UserSelectMenuBuilder,
   type ButtonInteraction,
   type ChatInputCommandInteraction,
   type Guild,
@@ -26,7 +25,6 @@ import {
   type Role,
   type RoleSelectMenuInteraction,
   type StringSelectMenuInteraction,
-  type UserSelectMenuInteraction,
 } from "discord.js";
 import cors from "cors";
 import express from "express";
@@ -80,17 +78,6 @@ type Application = {
   nicknameApplied?: boolean;
 };
 
-type ApplicationDraft = {
-  id: string;
-  guildId: string;
-  applicantId: string;
-  firstName: string;
-  lastName: string;
-  memberId: string;
-  rank: number;
-  createdAt: number;
-};
-
 type BotState = {
   guilds: Record<string, GuildConfig>;
   applications: Record<string, Application>;
@@ -107,7 +94,6 @@ const client = new Client({
 
 const state = await loadState();
 let stateWriteQueue = Promise.resolve();
-const applicationDrafts = new Map<string, ApplicationDraft>();
 
 const commandNames = {
   setup: "verification-setup",
@@ -198,10 +184,6 @@ function hasConfiguredHcRole(
   return config.hcRoleIds.some((roleId) =>
     Array.isArray(member.roles) ? member.roles.includes(roleId) : member.roles.cache.has(roleId),
   );
-}
-
-function memberHasConfiguredHcRole(member: GuildMember, config: GuildConfig): boolean {
-  return config.hcRoleIds.some((roleId) => member.roles.cache.has(roleId));
 }
 
 function getMissingChannelPermissions(
@@ -355,30 +337,10 @@ function buildApplicationModal(guildId: string, rank: number): ModalBuilder {
       new ActionRowBuilder<TextInputBuilder>().addComponents(
         input("member_id", "ID", "Unesi svoj ID"),
       ),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        input("invited_by", "Osoba koja vas je ubacila", "Upišite ime osobe koja vas je ubacila"),
+      ),
     );
-}
-
-function buildInviterSelectPrompt(draft: ApplicationDraft, config: GuildConfig) {
-  return {
-    content: [
-      `Podaci su sačuvani za **${draft.firstName} ${draft.lastName}** (Rank ${draft.rank}).`,
-      "",
-      config.hcRoleIds.length > 0
-        ? "Odaberi osobu koja te je ubacila. Možeš birati samo članove koji imaju barem jednu podešenu Admin/HC rolu."
-        : "Nema podešenih Admin/HC rola. Administrator mora prvo koristiti `/hc-role-setup`.",
-    ].join("\n"),
-    components: config.hcRoleIds.length > 0
-      ? [
-          new ActionRowBuilder<UserSelectMenuBuilder>().addComponents(
-            new UserSelectMenuBuilder()
-              .setCustomId(`choose_inviter:${draft.id}`)
-              .setPlaceholder("Odaberi Admin/HC osobu koja te je ubacila")
-              .setMinValues(1)
-              .setMaxValues(1),
-          ),
-        ]
-      : [],
-  };
 }
 
 function applicationPrompt(guildId: string, config: GuildConfig) {
@@ -637,7 +599,7 @@ async function handleSetup(interaction: ChatInputCommandInteraction): Promise<vo
         "2. Odaberi **rank** koji želiš.",
         "3. Upiši svoje **ime i prezime**.",
         "4. Upiši svoj **ID**.",
-        "5. Odaberi **osobu koja te je ubacila**.",
+        "5. Upiši ime **osobe koja te je ubacila**.",
         "6. Provjeri jesu li svi podaci točni.",
         "7. Pošalji prijavu i pričekaj da je **HC/Admin potvrdi**.",
         "",
@@ -1131,18 +1093,20 @@ async function handleApplicationSubmit(interaction: ModalSubmitInteraction) {
   const firstName = interaction.fields.getTextInputValue("first_name").trim();
   const lastName = interaction.fields.getTextInputValue("last_name").trim();
   const memberId = interaction.fields.getTextInputValue("member_id").trim();
+  const invitedBy = interaction.fields.getTextInputValue("invited_by").trim();
   const rank = Number(rankValue);
 
   if (
     !firstName ||
     !lastName ||
     !memberId ||
+    !invitedBy ||
     !Number.isInteger(rank) ||
     rank < 1 ||
     rank > 10
   ) {
     await interaction.reply({
-      content: "Proveri ime, prezime i ID. Osoba koja te je ubacila bira se u sledećem Discord meniju.",
+      content: "Proveri ime, prezime, ID i osobu koja vas je ubacila.",
       ephemeral: true,
     });
     return;
@@ -1157,116 +1121,28 @@ async function handleApplicationSubmit(interaction: ModalSubmitInteraction) {
     return;
   }
 
-  const draft: ApplicationDraft = {
-    id: `draft-${Date.now()}-${interaction.user.id.slice(-4)}`,
-    guildId,
-    applicantId: interaction.user.id,
-    firstName,
-    lastName,
-    memberId,
-    rank,
-    createdAt: Date.now(),
-  };
-  applicationDrafts.set(draft.id, draft);
-
-  await interaction.reply({
-    ...buildInviterSelectPrompt(draft, config),
-    ephemeral: true,
-  });
-}
-
-async function handleInviterSelection(interaction: UserSelectMenuInteraction): Promise<void> {
-  const [, draftId] = interaction.customId.split(":");
-  const draft = draftId ? applicationDrafts.get(draftId) : undefined;
-  if (!draft || Date.now() - draft.createdAt > 15 * 60 * 1000) {
-    if (draftId) applicationDrafts.delete(draftId);
-    await interaction.update({
-      content: "Ova prijava je istekla. Klikni ponovo na **Prijavi se** i popuni formular.",
-      components: [],
-    });
-    return;
-  }
-
-  const guild = interaction.guild;
-  const config = state.guilds[draft.guildId];
-  if (!guild || interaction.guildId !== draft.guildId || !config?.hcChannelId) {
-    applicationDrafts.delete(draft.id);
-    await interaction.update({
-      content: "Verifikacija trenutno nije podešena. Javi se administratoru.",
-      components: [],
-    });
-    return;
-  }
-
-  const selectedUserId = interaction.values[0];
-  const invitedByMember = selectedUserId
-    ? await guild.members.fetch(selectedUserId).catch(() => undefined)
-    : undefined;
-  if (!invitedByMember) {
-    await interaction.update({
-      content: "Ne mogu da pronađem izabranog člana. Odaberi člana ponovo.",
-      components: [buildInviterSelectPrompt(draft, config).components[0]],
-    });
-    return;
-  }
-
-  if (!config.hcRoleIds.length) {
-    applicationDrafts.delete(draft.id);
-    await interaction.update({
-      content: "Nema podešenih Admin/HC rola. Administrator mora prvo koristiti `/hc-role-setup`.",
-      components: [],
-    });
-    return;
-  }
-
-  if (!memberHasConfiguredHcRole(invitedByMember, config)) {
-    await interaction.update({
-      content: [
-        "❌ Izabrani član nema nijednu podešenu Admin/HC rolu.",
-        "Odaberi člana koji ima barem jednu od rola prikazanih u `/hc-role-list`.",
-      ].join("\n"),
-      components: [buildInviterSelectPrompt(draft, config).components[0]],
-    });
-    return;
-  }
-
   const duplicateMemberId = Object.values(state.applications).find(
     (application) =>
-      application.guildId === draft.guildId &&
-      application.memberId.toLowerCase() === draft.memberId.toLowerCase() &&
+      application.guildId === guildId &&
+      application.memberId.toLowerCase() === memberId.toLowerCase() &&
       application.status !== "rejected",
   );
   if (duplicateMemberId) {
-    applicationDrafts.delete(draft.id);
-    await interaction.update({
+    await interaction.reply({
       content: "Ovaj ID već postoji u aktivnoj ili potvrđenoj prijavi. Proveri podatke sa HC-om.",
-      components: [],
+      ephemeral: true,
     });
     return;
   }
 
   const hasPending = Object.values(state.applications).some(
     (application) =>
-      application.guildId === draft.guildId &&
-      application.applicantId === draft.applicantId &&
+      application.guildId === guildId &&
+      application.applicantId === interaction.user.id &&
       application.status === "pending",
   );
   if (hasPending) {
-    applicationDrafts.delete(draft.id);
-    await interaction.update({
-      content: "Već imaš prijavu koja čeka potvrdu HC-a.",
-      components: [],
-    });
-    return;
-  }
-
-  const rankRole = getRankRole(config, draft.rank);
-  if (!rankRole) {
-    applicationDrafts.delete(draft.id);
-    await interaction.update({
-      content: `Rank ${draft.rank} više nije podešen na serveru. Javi se HC-u.`,
-      components: [],
-    });
+    await interaction.reply({ content: "Već imaš prijavu koja čeka potvrdu HC-a.", ephemeral: true });
     return;
   }
 
@@ -1277,34 +1153,31 @@ async function handleInviterSelection(interaction: UserSelectMenuInteraction): P
     !hcChannel.isTextBased() ||
     !("send" in hcChannel)
   ) {
-    applicationDrafts.delete(draft.id);
-    await interaction.update({
+    await interaction.reply({
       content: `❌ Podešeni HC kanal <#${config.hcChannelId}> nije dostupan ili nije tekstualni kanal. Administrator mora ponovo pokrenuti \`/verification-setup\`.`,
-      components: [],
+      ephemeral: true,
     });
     return;
   }
 
   const botMember = await guild.members.fetchMe().catch(() => undefined);
   if (!botMember) {
-    applicationDrafts.delete(draft.id);
-    await interaction.update({
+    await interaction.reply({
       content: "❌ Ne mogu da proverim botove dozvole na serveru. Javi se administratoru.",
-      components: [],
+      ephemeral: true,
     });
     return;
   }
 
   const missingPermissions = getMissingChannelPermissions(hcChannel, botMember, channelSendPermissions);
   if (missingPermissions.length > 0) {
-    applicationDrafts.delete(draft.id);
-    await interaction.update({
+    await interaction.reply({
       content: [
         `❌ Bot ne može poslati prijavu u HC kanal <#${hcChannel.id}>.`,
         `Nedostaju dozvole: ${missingPermissions.join(", ")}.`,
         "Administrator treba da proveri dozvole kanala i botovu rolu.",
       ].join("\n"),
-      components: [],
+      ephemeral: true,
     });
     return;
   }
@@ -1314,28 +1187,26 @@ async function handleInviterSelection(interaction: UserSelectMenuInteraction): P
   );
   const missingRoleIds = config.hcRoleIds.filter((_, index) => !configuredRoles[index]);
   if (missingRoleIds.length > 0) {
-    applicationDrafts.delete(draft.id);
-    await interaction.update({
+    await interaction.reply({
       content: [
         "❌ Jedna ili više podešenih Admin/HC rola više ne postoji na serveru.",
         `Nedostaju role ID-jevi: ${missingRoleIds.join(", ")}`,
         "Administrator treba ponovo podesiti role kroz `/hc-role-setup`.",
       ].join("\n"),
-      components: [],
+      ephemeral: true,
     });
     return;
   }
 
   const application: Application = {
     id: `app-${Date.now()}-${interaction.user.id.slice(-4)}`,
-    guildId: draft.guildId,
-    applicantId: draft.applicantId,
-    firstName: draft.firstName,
-    lastName: draft.lastName,
-    memberId: draft.memberId,
-    rank: draft.rank,
-    invitedBy: `<@${invitedByMember.id}>`,
-    invitedById: invitedByMember.id,
+    guildId,
+    applicantId: interaction.user.id,
+    firstName,
+    lastName,
+    memberId,
+    rank,
+    invitedBy,
     status: "pending",
     createdAt: new Date().toISOString(),
   };
@@ -1348,32 +1219,30 @@ async function handleInviterSelection(interaction: UserSelectMenuInteraction): P
       content: hcRoleMentions || undefined,
       allowedMentions: {
         roles: config.hcRoleIds,
-        users: [application.applicantId, invitedByMember.id],
+        users: [application.applicantId],
       },
       embeds: [applicationEmbed(application, `<@${application.applicantId}>`, roleMention)],
       components: [applicationButtons(application.id)],
     });
   } catch (error) {
-    applicationDrafts.delete(draft.id);
     logger.error({ err: error, channelId: hcChannel.id, applicationId: application.id }, "Could not send HC application");
-    await interaction.update({
+    await interaction.reply({
       content: [
         `❌ Slanje prijave u HC kanal <#${hcChannel.id}> nije uspelo.`,
         "Proveri View Channel, Send Messages, Embed Links i Read Message History dozvole.",
         discordErrorCode(error) ? `Discord kod greške: ${discordErrorCode(error)}.` : "Discord nije prihvatio poruku.",
       ].join("\n"),
-      components: [],
+      ephemeral: true,
     });
     return;
   }
-  applicationDrafts.delete(draft.id);
   state.applications[application.id] = application;
   application.approvalMessageId = approvalMessage.id;
   await saveState();
 
-  await interaction.update({
+  await interaction.reply({
     content: "Prijava je poslata HC-u na potvrdu. Sačekaj odgovor.",
-    components: [],
+    ephemeral: true,
   });
 }
 
@@ -1659,10 +1528,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
     } else if (interaction.isRoleSelectMenu()) {
       if (interaction.customId.startsWith("configure_hc_roles:")) {
         await handleHcRoleSelection(interaction);
-      }
-    } else if (interaction.isUserSelectMenu()) {
-      if (interaction.customId.startsWith("choose_inviter:")) {
-        await handleInviterSelection(interaction);
       }
     } else if (interaction.isButton()) {
       await handleButton(interaction);
