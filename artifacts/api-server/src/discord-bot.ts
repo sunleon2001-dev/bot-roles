@@ -878,7 +878,7 @@ async function handleCopyRoleCommand(interaction: ChatInputCommandInteraction): 
       `**Source Role:** ${sourceRole}`,
       `**Target Role:** ${targetRole}`,
       "",
-      "Kopiraće se naziv, permissions, boja, hoist, mentionable, icon/unicode emoji i sve channel/category dozvole koje Discord API dopušta.",
+      "Kopiraće se permissions, hoist, mentionable, icon/unicode emoji i sve channel/category dozvole koje Discord API dopušta. Ime i boja Target Role ostaju nepromenjeni.",
       "Klikni dugme tek kada proveriš oba rolea.",
     ].join("\n"),
     components: [copyRoleButton(sourceRole.id, targetRole.id)],
@@ -904,12 +904,6 @@ async function copyRoleSettings(
 ): Promise<{ copiedOverwrites: number; removedOverwrites: number; failedOverwrites: number }> {
   const sourceIconUrl = sourceRole.iconURL({ extension: "png", size: 256 });
   await targetRole.edit({
-    name: sourceRole.name,
-    colors: {
-      primaryColor: sourceRole.colors.primaryColor,
-      secondaryColor: sourceRole.colors.secondaryColor,
-      tertiaryColor: sourceRole.colors.tertiaryColor,
-    },
     hoist: sourceRole.hoist,
     mentionable: sourceRole.mentionable,
     permissions: sourceRole.permissions,

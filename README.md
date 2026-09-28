@@ -154,13 +154,13 @@ Bot prvo prikazuje izabrane role i gumb `✅ Kopiraj sve`. Kopiranje počinje te
 
 Kopiraju se:
 
-- naziv
 - permissions
-- boja, uključujući podržane napredne role boje
 - hoist
 - mentionable
 - role icon i unicode emoji kada ih Discord API dopušta
 - source role Allow/Deny overwrite dozvole na kanalima i kategorijama
+
+Ime i boja Target Role ostaju nepromenjeni.
 
 Ako source nema overwrite na kanalu, postojeći target overwrite se uklanja kako bi postavke ostale usklađene. Hijerarhijska pozicija se ne kopira jer Discord ne može imati dve role na istoj poziciji.
 

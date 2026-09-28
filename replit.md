@@ -41,7 +41,7 @@ Discord bot koji prikuplja prijave novih članova, šalje ih HC-u na potvrdu i n
 - Rankovi se biraju kroz Discord Select Menu i povezuju sa rolama komandom `/rank-add`, pa se promena radi bez izmene koda.
 - Samo administratori i role podešene komandom `/hc-role-setup` (ili pojedinačno `/hc-role-add`) mogu obrađivati prijave; sve podešene role se tagiraju u HC poruci.
 - Direktni odgovori korisnicima šalju se ephemeral; panel prijave, HC prijave i logovi ostaju javni samo u svojim namenjenim kanalima.
-- Komanda `/copy-role` kopira podešene role-level postavke i role overwrite dozvole na kanalima/kategorijama nakon potvrde dugmetom; hijerarhijska pozicija role se ne kopira jer Discord ne može imati dve role na istoj poziciji.
+- Komanda `/copy-role` kopira podešene role-level postavke i role overwrite dozvole na kanalima/kategorijama nakon potvrde dugmetom, ali ostavlja ime i boju Target Role nepromenjenima; hijerarhijska pozicija role se ne kopira jer Discord ne može imati dve role na istoj poziciji.
 - Odobrene i odbijene prijave kopiraju se u poseban log kanal.
 - Podaci i odluke se čuvaju u JSON fajlu, tako da restart bota ne briše prijave.
 
