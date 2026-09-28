@@ -4,9 +4,9 @@ Discord bot za automatski prijem članova, izbor ranka, HC potvrdu i dodelu role
 
 ## Funkcije
 
-- Kandidat reaguje na podešenu poruku i dobija privatni DM tok.
-- Rank se bira kroz Discord Select Menu.
-- Kandidat unosi ime, prezime, ID i Discord mention/ID osobe koja ga je ubacila.
+- Kandidat klikne dugme na panelu i dobija privatni Discord prozor za prijavu.
+- Rank se bira kroz privatni Discord Select Menu, bez slanja DM poruka.
+- Nakon izbora ranka otvara se modal za ime, prezime, ID i Discord mention/ID osobe koja ga je ubacila.
 - HC dobija prijavu sa dugmadima za odobrenje ili odbijanje.
 - Odbijanje podržava opcionalan razlog.
 - Odobrenje dodeljuje rank rolu i postavlja nadimak u formatu `Ime Prezime | ID`.
@@ -76,7 +76,6 @@ Botu su potrebne sledeće dozvole:
 - View Channel
 - Send Messages
 - Read Message History
-- Add Reactions
 - Embed Links
 - Manage Roles
 - Manage Channels
@@ -88,13 +87,12 @@ Botova najviša rola mora biti iznad svih rank rola koje dodeljuje ili menja. Za
 Gateway intents koje bot koristi:
 
 - `Guilds`
-- `GuildMessageReactions`
 
 Privileged `Guild Members` intent nije potreban.
 
 ## Komande
 
-### Podešavanje prijava
+### Objavljivanje panela za prijave
 
 ```text
 /verification-setup
@@ -102,11 +100,12 @@ Privileged `Guild Members` intent nije potreban.
 
 Komanda traži:
 
-- `message_id` — ID poruke na koju kandidati reaguju
-- `target_channel` — kanal u kojem se poruka nalazi
+- `target_channel` — kanal u koji bot objavljuje panel sa dugmetom
 - `hc_channel` — kanal za nove prijave
 - `log_channel` — kanal za odluke
-- `emoji` — opcionalni emoji, podrazumevano `✅`
+
+Bot automatski objavljuje poruku sa dugmetom **Otvori prijavu**. Klik na
+dugme otvara privatni rank meni, a zatim i modal za unos svih podataka.
 
 ### Rankovi
 

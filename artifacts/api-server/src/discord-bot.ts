@@ -8,7 +8,6 @@ import {
   Events,
   GatewayIntentBits,
   ModalBuilder,
-  Partials,
   PermissionsBitField,
   PermissionFlagsBits,
   StringSelectMenuBuilder,
@@ -19,15 +18,11 @@ import {
   type Guild,
   type GuildMember,
   type Message,
-  type MessageReaction,
   type ModalSubmitInteraction,
-  type PartialMessageReaction,
-  type PartialUser,
   type PermissionOverwriteOptions,
   type PermissionOverwrites,
   type Role,
   type StringSelectMenuInteraction,
-  type User,
 } from "discord.js";
 import cors from "cors";
 import express from "express";
@@ -58,7 +53,6 @@ type GuildConfig = {
   targetMessageId?: string;
   hcChannelId?: string;
   logChannelId?: string;
-  reactionEmoji: string;
   hcRoleIds: string[];
   rankRoles: RankRole[];
 };
@@ -93,11 +87,7 @@ const statePath = path.join(dataDirectory, "verification-state.json");
 const defaultState: BotState = { guilds: {}, applications: {} };
 
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessageReactions,
-  ],
-  partials: [Partials.Message, Partials.Channel, Partials.Reaction],
+  intents: [GatewayIntentBits.Guilds],
 });
 
 const state = await loadState();
@@ -148,13 +138,11 @@ function getGuildConfig(guildId: string): GuildConfig {
   const existing = state.guilds[guildId];
   if (existing) {
     existing.rankRoles ??= [];
-    existing.reactionEmoji ??= "✅";
     existing.hcRoleIds ??= [];
     return existing;
   }
   const config: GuildConfig = {
     rankRoles: [],
-    reactionEmoji: "✅",
     hcRoleIds: [],
   };
   state.guilds[guildId] = config;
@@ -224,6 +212,15 @@ function copyRoleButton(sourceRoleId: string, targetRoleId: string, disabled = f
       .setEmoji("✅")
       .setStyle(ButtonStyle.Success)
       .setDisabled(disabled),
+  );
+}
+
+function applicationStartButton(guildId: string) {
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`start_application:${guildId}`)
+      .setLabel("Otvori prijavu")
+      .setStyle(ButtonStyle.Primary),
   );
 }
 
@@ -311,7 +308,7 @@ function applicationPrompt(guildId: string, config: GuildConfig) {
   return {
     content:
       rankOptions.length > 0
-        ? "Reagovao si na prijavu. Prvo izaberi rank, pa otvori privatnu formu."
+        ? "Klikni na rank za koji se prijavljuješ, pa otvori privatnu formu."
         : "HC još nije podesio rankove. Pokušaj ponovo kasnije.",
     components: [
       ...(rankOptions.length > 0
@@ -359,14 +356,6 @@ function buildRejectionModal(applicationId: string): ModalBuilder {
     );
 }
 
-function reactionMatches(reaction: MessageReaction, configuredEmoji: string): boolean {
-  return (
-    reaction.emoji.name === configuredEmoji ||
-    reaction.emoji.id === configuredEmoji ||
-    reaction.emoji.toString() === configuredEmoji
-  );
-}
-
 function makeNickname(application: Application): string {
   const nickname = `${application.firstName} ${application.lastName} | ${application.memberId}`;
   return nickname.length <= 32 ? nickname : nickname.slice(0, 32);
@@ -376,18 +365,12 @@ function createCommands() {
   return [
     {
       name: commandNames.setup,
-      description: "Podesi poruku, emoji i kanale za prijave",
+      description: "Objavi panel sa dugmetom i podesi kanale za prijave",
       options: [
-        {
-          type: 3,
-          name: "message_id",
-          description: "ID poruke za prijavu",
-          required: true,
-        },
         {
           type: 7,
           name: "target_channel",
-          description: "Kanal u kome se nalazi poruka",
+          description: "Kanal u koji se objavljuje panel za prijavu",
           required: true,
           channel_types: [ChannelType.GuildText, ChannelType.GuildAnnouncement],
         },
@@ -404,13 +387,6 @@ function createCommands() {
           description: "Kanal u koji se zapisuju odobrene i odbijene prijave",
           required: true,
           channel_types: [ChannelType.GuildText, ChannelType.GuildAnnouncement],
-        },
-        {
-          type: 3,
-          name: "emoji",
-          description: "Emoji za prijavu, na primer ✅",
-          required: false,
-          max_length: 100,
         },
       ],
     },
@@ -511,11 +487,9 @@ async function handleSetup(interaction: ChatInputCommandInteraction): Promise<vo
     return;
   }
 
-  const messageId = interaction.options.getString("message_id", true);
   const targetChannel = interaction.options.getChannel("target_channel", true);
   const hcChannel = interaction.options.getChannel("hc_channel", true);
   const logChannel = interaction.options.getChannel("log_channel", true);
-  const emoji = interaction.options.getString("emoji")?.trim() || "✅";
 
   if (
     ![ChannelType.GuildText, ChannelType.GuildAnnouncement].includes(targetChannel.type) ||
@@ -526,17 +500,23 @@ async function handleSetup(interaction: ChatInputCommandInteraction): Promise<vo
     return;
   }
 
-  if (!("messages" in targetChannel)) {
-    await interaction.reply({ content: "Izabrani kanal ne može sadržati poruke.", ephemeral: true });
+  if (!("send" in targetChannel)) {
+    await interaction.reply({ content: "Izabrani kanal ne može slati poruke.", ephemeral: true });
     return;
   }
 
+  let panelMessage: Message;
   try {
-    const message = await targetChannel.messages.fetch(messageId);
-    await message.react(emoji);
+    panelMessage = await targetChannel.send({
+      content: [
+        "## Prijava za server",
+        "Klikni dugme ispod da privatno izabereš rank i popuniš podatke.",
+      ].join("\n"),
+      components: [applicationStartButton(interaction.guildId!)],
+    });
   } catch {
     await interaction.reply({
-      content: `Ne mogu da pronađem poruku ili dodam ${emoji} reakciju. Proveri ID i dozvole bota.`,
+      content: "Ne mogu da objavim panel. Proveri da bot ima View Channel i Send Messages dozvole.",
       ephemeral: true,
     });
     return;
@@ -544,15 +524,14 @@ async function handleSetup(interaction: ChatInputCommandInteraction): Promise<vo
 
   const config = getGuildConfig(interaction.guildId!);
   config.targetChannelId = targetChannel.id;
-  config.targetMessageId = messageId;
+  config.targetMessageId = panelMessage.id;
   config.hcChannelId = hcChannel.id;
   config.logChannelId = logChannel.id;
-  config.reactionEmoji = emoji;
   await saveState();
 
   await interaction.reply({
     content:
-      `Podešeno. Kandidati reaguju sa ${emoji} na poruku <#${targetChannel.id}> (\`${messageId}\`), prijave idu u <#${hcChannel.id}>, a log u <#${logChannel.id}>.`,
+      `Podešeno. Panel za prijavu je objavljen u <#${targetChannel.id}> (\`${panelMessage.id}\`), prijave idu u <#${hcChannel.id}>, a log u <#${logChannel.id}>.`,
     ephemeral: true,
   });
 }
@@ -689,10 +668,9 @@ async function handleStatus(interaction: ChatInputCommandInteraction): Promise<v
 
   await interaction.reply({
     content: [
-      `Poruka za reakciju: ${config.targetMessageId ? `<#${config.targetChannelId}> / \`${config.targetMessageId}\`` : "nije podešena"}`,
+      `Panel za prijavu: ${config.targetMessageId ? `<#${config.targetChannelId}> / \`${config.targetMessageId}\`` : "nije podešen"}`,
       `HC kanal: ${config.hcChannelId ? `<#${config.hcChannelId}>` : "nije podešen"}`,
       `Log kanal: ${config.logChannelId ? `<#${config.logChannelId}>` : "nije podešen"}`,
-      `Emoji: ${config.reactionEmoji}`,
       `Podešenih rankova: ${config.rankRoles.length}/10`,
       `HC rola: ${config.hcRoleIds.length > 0 ? config.hcRoleIds.map((roleId) => `<@&${roleId}>`).join(", ") : "samo administratori"}`,
       `Prijava na čekanju: ${pending}`,
@@ -957,55 +935,6 @@ async function handleChatCommand(interaction: ChatInputCommandInteraction): Prom
   }
 }
 
-async function handleReaction(
-  reaction: MessageReaction | PartialMessageReaction,
-  user: User | PartialUser,
-): Promise<void> {
-  const fullUser = user.partial ? await user.fetch() : user;
-  if (fullUser.bot) return;
-  const fullReaction = reaction.partial ? await reaction.fetch() : reaction;
-
-  const message = fullReaction.message;
-  const guild = message.guild;
-  if (!guild) return;
-
-  const config = state.guilds[guild.id];
-  if (
-    !config ||
-    config.targetMessageId !== message.id ||
-    !reactionMatches(fullReaction, config.reactionEmoji ?? "✅")
-  ) {
-    return;
-  }
-
-  const existing = Object.values(state.applications).find(
-    (application) =>
-      application.guildId === guild.id &&
-      application.applicantId === fullUser.id &&
-      application.status === "pending",
-  );
-  if (existing) {
-    await fullUser.send("Već imaš prijavu koja čeka potvrdu HC-a.").catch(() => undefined);
-    return;
-  }
-
-  await fullReaction.users.remove(fullUser.id).catch(() => undefined);
-  try {
-    await fullUser.send(applicationPrompt(guild.id, config));
-  } catch {
-    const channel = message.channel;
-    if (channel.isTextBased() && "send" in channel) {
-      const prompt = await channel.send({
-        content: `<@${fullUser.id}> Ne mogu da ti pošaljem DM. Klikni dugme ispod za privatnu prijavu.`,
-        components: applicationPrompt(guild.id, config).components,
-      });
-      setTimeout(() => {
-        void prompt.delete().catch(() => undefined);
-      }, 60_000);
-    }
-  }
-}
-
 function extractDiscordUserId(value: string): string | undefined {
   const mention = value.match(/^<@!?(\d+)>$/);
   if (mention) return mention[1];
@@ -1232,16 +1161,6 @@ async function handleApproval(
   });
   await sendApplicationLog(guild, config, application, `<@&${rankRole.roleId}>`);
 
-  await client.users.fetch(application.applicantId)
-    .then((user) =>
-      user.send(
-        nicknameApplied
-          ? `HC je odobrio tvoju prijavu. Dodeljen ti je rank ${application.rank}.`
-          : `HC je odobrio tvoju prijavu i dodeljen ti je rank ${application.rank}, ali nadimak nije mogao automatski da se promeni.`,
-      ),
-    )
-    .catch(() => undefined);
-
   if (!nicknameApplied) {
     await interaction.followUp({
       content: "Prijava je odobrena i rola je dodeljena, ali nadimak nije promenjen zbog Discord dozvola.",
@@ -1301,9 +1220,6 @@ async function handleRejection(
   }
   await sendApplicationLog(guild, config, application, rankRole ? `<@&${rankRole.roleId}>` : "Nije podešeno");
 
-  await client.users.fetch(application.applicantId)
-    .then((user) => user.send("HC je odbio tvoju prijavu. Za više informacija obrati se HC-u."))
-    .catch(() => undefined);
 }
 
 async function handleRankSelect(interaction: StringSelectMenuInteraction): Promise<void> {
@@ -1318,6 +1234,21 @@ async function handleRankSelect(interaction: StringSelectMenuInteraction): Promi
 }
 
 async function handleButton(interaction: ButtonInteraction): Promise<void> {
+  if (interaction.customId.startsWith("start_application:")) {
+    const [, guildId] = interaction.customId.split(":");
+    const config = state.guilds[guildId];
+    if (!config || interaction.guildId !== guildId) {
+      await interaction.reply({ content: "Ovaj panel više nije aktivan.", ephemeral: true });
+      return;
+    }
+
+    await interaction.reply({
+      ...applicationPrompt(guildId, config),
+      ephemeral: true,
+    });
+    return;
+  }
+
   if (interaction.customId.startsWith("copy_role:")) {
     await handleCopyRoleButton(interaction);
     return;
@@ -1403,12 +1334,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
     }
   }
-});
-
-client.on(Events.MessageReactionAdd, (reaction, user) => {
-  void handleReaction(reaction, user).catch((error) => {
-    logger.error({ err: error }, "Discord reaction handling failed");
-  });
 });
 
 export async function startDiscordBot(): Promise<void> {
