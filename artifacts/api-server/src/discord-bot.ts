@@ -10,6 +10,7 @@ import {
   ModalBuilder,
   PermissionsBitField,
   PermissionFlagsBits,
+  RoleSelectMenuBuilder,
   StringSelectMenuBuilder,
   TextInputBuilder,
   TextInputStyle,
@@ -22,6 +23,7 @@ import {
   type PermissionOverwriteOptions,
   type PermissionOverwrites,
   type Role,
+  type RoleSelectMenuInteraction,
   type StringSelectMenuInteraction,
 } from "discord.js";
 import cors from "cors";
@@ -101,6 +103,7 @@ const commandNames = {
   addHcRole: "hc-role-add",
   removeHcRole: "hc-role-remove",
   listHcRoles: "hc-role-list",
+  setupHcRoles: "hc-role-setup",
   status: "verification-status",
   copyRole: "copy-role",
 } as const;
@@ -149,7 +152,13 @@ function getGuildConfig(guildId: string): GuildConfig {
   return config;
 }
 
-function isAdmin(interaction: ChatInputCommandInteraction | ButtonInteraction | ModalSubmitInteraction): boolean {
+function isAdmin(
+  interaction:
+    | ChatInputCommandInteraction
+    | ButtonInteraction
+    | ModalSubmitInteraction
+    | RoleSelectMenuInteraction,
+): boolean {
   const permissions = interaction.memberPermissions;
   return Boolean(
     permissions?.has(PermissionsBitField.Flags.Administrator) ||
@@ -193,12 +202,14 @@ function applicationButtons(applicationId: string, disabled = false) {
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
       .setCustomId(`approve_application:${applicationId}`)
-      .setLabel("Odobri")
+      .setLabel("Potvrdi")
+      .setEmoji("🟢")
       .setStyle(ButtonStyle.Success)
       .setDisabled(disabled),
     new ButtonBuilder()
       .setCustomId(`reject_application:${applicationId}`)
       .setLabel("Odbij")
+      .setEmoji("🔴")
       .setStyle(ButtonStyle.Danger)
       .setDisabled(disabled),
   );
@@ -219,7 +230,7 @@ function applicationStartButton(guildId: string) {
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
       .setCustomId(`start_application:${guildId}`)
-      .setLabel("Otvori prijavu")
+      .setLabel("Prijavi se")
       .setStyle(ButtonStyle.Primary),
   );
 }
@@ -244,13 +255,14 @@ function applicationEmbed(
   const embed = new EmbedBuilder()
     .setColor(color)
     .setTitle(`Nova prijava — ${status}`)
-    .setDescription(`Kandidat: ${memberMention}\nPrijava: \`${application.id}\``)
+    .setDescription(`Prijava: \`${application.id}\``)
     .addFields(
       { name: "Ime", value: application.firstName, inline: true },
       { name: "Prezime", value: application.lastName, inline: true },
       { name: "ID", value: application.memberId, inline: true },
       { name: "Rank", value: `Rank ${application.rank}`, inline: true },
       { name: "Ko ga je ubacio", value: application.invitedBy, inline: true },
+      { name: "Discord korisnik", value: memberMention, inline: true },
       { name: "Dodeljena uloga", value: roleMention, inline: true },
     )
     .setTimestamp(new Date(application.createdAt));
@@ -280,7 +292,7 @@ function buildApplicationModal(guildId: string, rank: number): ModalBuilder {
       .setMaxLength(100);
 
   return new ModalBuilder()
-    .setCustomId(`submit_application:${guildId}`)
+    .setCustomId(`submit_application:${guildId}:${rank}`)
     .setTitle("Prijava za server")
     .addComponents(
       new ActionRowBuilder<TextInputBuilder>().addComponents(
@@ -457,6 +469,10 @@ function createCommands() {
       description: "Prikaži role koje mogu obrađivati prijave",
     },
     {
+      name: commandNames.setupHcRoles,
+      description: "Odaberi sve Admin/HC roleove koji obrađuju prijave",
+    },
+    {
       name: commandNames.status,
       description: "Prikaži trenutno podešavanje verifikacije",
     },
@@ -509,8 +525,23 @@ async function handleSetup(interaction: ChatInputCommandInteraction): Promise<vo
   try {
     panelMessage = await targetChannel.send({
       content: [
-        "## Prijava za server",
-        "Klikni dugme ispod da privatno izabereš rank i popuniš podatke.",
+        "## 📋 Prijava za server",
+        "",
+        "Klikni **dugme ispod** kako bi privatno ispunio prijavu.",
+        "",
+        "### Kako ispuniti prijavu?",
+        "",
+        "1. Klikni dugme **Prijavi se**.",
+        "2. Odaberi **rank** koji želiš.",
+        "3. Upiši svoje **ime i prezime**.",
+        "4. Upiši svoj **ID**.",
+        "5. Odaberi **osobu koja te je ubacila**.",
+        "6. Provjeri jesu li svi podaci točni.",
+        "7. Pošalji prijavu i pričekaj da je **HC/Admin potvrdi**.",
+        "",
+        "⚠️ **VAŽNO:** Ako ne ispuniš prijavu ili ne uneseš sve potrebne podatke, **nećeš dobiti rank/role**.",
+        "",
+        "Nakon slanja prijave moraš pričekati potvrdu HC/Admina. **Rank se dodjeljuje tek nakon što prijava bude potvrđena.**",
       ].join("\n"),
       components: [applicationStartButton(interaction.guildId!)],
     });
@@ -652,6 +683,57 @@ async function handleListHcRoles(interaction: ChatInputCommandInteraction): Prom
       ? config.hcRoleIds.map((roleId) => `<@&${roleId}>`).join("\n")
       : "Nema posebno podešenih HC rola. Administratori sa Manage Server dozvolom i dalje mogu obrađivati prijave.",
     ephemeral: true,
+  });
+}
+
+async function handleSetupHcRoles(interaction: ChatInputCommandInteraction): Promise<void> {
+  if (!isApplicationStaff(interaction)) {
+    await interaction.reply({ content: "Ovu komandu mogu koristiti samo administratori.", ephemeral: true });
+    return;
+  }
+
+  const config = getGuildConfig(interaction.guildId!);
+  await interaction.reply({
+    content: [
+      "Odaberi sve roleove koji mogu potvrđivati i odbijati prijave.",
+      config.hcRoleIds.length > 0
+        ? `Trenutno odabrani: ${config.hcRoleIds.map((roleId) => `<@&${roleId}>`).join(", ")}`
+        : "Trenutno nema odabranih roleova.",
+    ].join("\n"),
+    components: [
+      new ActionRowBuilder<RoleSelectMenuBuilder>().addComponents(
+        new RoleSelectMenuBuilder()
+          .setCustomId(`configure_hc_roles:${interaction.guildId}`)
+          .setPlaceholder("Odaberi Admin/HC roleove")
+          .setMinValues(0)
+          .setMaxValues(25),
+      ),
+    ],
+    ephemeral: true,
+  });
+}
+
+async function handleHcRoleSelection(interaction: RoleSelectMenuInteraction): Promise<void> {
+  if (!isAdmin(interaction)) {
+    await interaction.reply({ content: "Ovu komandu mogu koristiti samo administratori.", ephemeral: true });
+    return;
+  }
+
+  const guildId = interaction.guildId;
+  if (!guildId) {
+    await interaction.reply({ content: "Server nije dostupan.", ephemeral: true });
+    return;
+  }
+
+  const config = getGuildConfig(guildId);
+  config.hcRoleIds = [...new Set(interaction.values)];
+  await saveState();
+
+  await interaction.update({
+    content: config.hcRoleIds.length > 0
+      ? `✅ Podešeni Admin/HC roleovi: ${config.hcRoleIds.map((roleId) => `<@&${roleId}>`).join(", ")}\nOni će dobijati obaveštenja i moći će da potvrđuju ili odbijaju prijave.`
+      : "✅ Uklonjeni su svi posebno podešeni Admin/HC roleovi. Samo server administratori mogu obrađivati prijave.",
+    components: [],
   });
 }
 
@@ -1031,7 +1113,7 @@ async function handleApplicationSubmit(interaction: ModalSubmitInteraction) {
   };
   state.applications[application.id] = application;
 
-  const hcChannel = await guild.channels.fetch(config.hcChannelId);
+  const hcChannel = await guild.channels.fetch(config.hcChannelId).catch(() => undefined);
   if (!hcChannel?.isTextBased() || !("send" in hcChannel)) {
     delete state.applications[application.id];
     await interaction.reply({ content: "HC kanal nije dostupan. Javi se administratoru.", ephemeral: true });
@@ -1039,9 +1121,12 @@ async function handleApplicationSubmit(interaction: ModalSubmitInteraction) {
   }
 
   const roleMention = `<@&${rankRole.roleId}>`;
+  const hcRoleMentions = config.hcRoleIds.map((roleId) => `<@&${roleId}>`).join(" ");
   let approvalMessage;
   try {
     approvalMessage = await hcChannel.send({
+      content: hcRoleMentions || undefined,
+      allowedMentions: config.hcRoleIds.length > 0 ? { roles: config.hcRoleIds } : undefined,
       embeds: [applicationEmbed(application, `<@${interaction.user.id}>`, roleMention)],
       components: [applicationButtons(application.id)],
     });
@@ -1161,12 +1246,12 @@ async function handleApproval(
   });
   await sendApplicationLog(guild, config, application, `<@&${rankRole.roleId}>`);
 
-  if (!nicknameApplied) {
-    await interaction.followUp({
-      content: "Prijava je odobrena i rola je dodeljena, ali nadimak nije promenjen zbog Discord dozvola.",
-      ephemeral: true,
-    });
-  }
+  await interaction.followUp({
+    content: nicknameApplied
+      ? "✅ Prijava je potvrđena. Rank je dodeljen i nickname je promenjen."
+      : "✅ Prijava je potvrđena i rank je dodeljen, ali nickname nije promenjen zbog Discord dozvola.",
+    ephemeral: true,
+  });
 }
 
 async function handleRejection(
@@ -1210,6 +1295,10 @@ async function handleRejection(
     await interaction.update({
       embeds: [rejectedEmbed],
       components: [applicationButtons(application.id, true)],
+    });
+    await interaction.followUp({
+      content: "✅ Prijava je odbijena i evidentirana.",
+      ephemeral: true,
     });
   } else {
     await interaction.reply({ content: "Prijava je odbijena i evidentirana.", ephemeral: true });
@@ -1305,6 +1394,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
     } else if (interaction.isStringSelectMenu()) {
       if (interaction.customId.startsWith("choose_rank:")) {
         await handleRankSelect(interaction);
+      }
+    } else if (interaction.isRoleSelectMenu()) {
+      if (interaction.customId.startsWith("configure_hc_roles:")) {
+        await handleHcRoleSelection(interaction);
       }
     } else if (interaction.isButton()) {
       await handleButton(interaction);

@@ -119,6 +119,18 @@ Rankovi su podržani od 1 do 10.
 
 ### HC dozvole
 
+Za izbor više Admin/HC rola odjednom koristi:
+
+```text
+/hc-role-setup
+```
+
+Administrator kroz Discord role picker može odabrati, na primer, `@Owner`,
+`@Head Admin`, `@Admin` i `@HC`. Sve odabrane role mogu potvrditi ili odbiti
+prijave, a bot ih sve tagira u poruci nove prijave.
+
+Postoje i komande za pojedinačno dodavanje ili uklanjanje rola:
+
 ```text
 /hc-role-add role:@HC
 /hc-role-remove role:@HC
