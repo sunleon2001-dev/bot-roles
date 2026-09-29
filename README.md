@@ -10,6 +10,7 @@ Discord bot za automatski prijem članova, izbor ranka, HC potvrdu i dodelu role
 - HC dobija prijavu sa dugmadima za odobrenje ili odbijanje.
 - Odbijanje podržava opcionalan razlog.
 - Odobrenje dodeljuje rank rolu i postavlja nadimak u formatu `Ime Prezime | ID`.
+- Članovi koji već imaju bilo koju podešenu rank rolu ne mogu poslati novu prijavu.
 - Aktivne i potvrđene duple prijave sa istim ID-jem se blokiraju.
 - Sve odluke se zapisuju u poseban log kanal.
 - `/copy-role` kopira dostupne role postavke i channel/category overwrite dozvole nakon potvrde.

@@ -197,11 +197,11 @@ function getMissingChannelPermissions(
     !("permissionsFor" in channel) ||
     typeof channel.permissionsFor !== "function"
   ) {
-    return ["pristup kanalu"];
+    return ["channel access"];
   }
 
   const permissions = channel.permissionsFor(botMember);
-  if (!permissions) return ["pristup kanalu"];
+  if (!permissions) return ["channel access"];
   return required
     .filter(({ flag }) => !permissions.has(flag))
     .map(({ label }) => label);
@@ -236,13 +236,13 @@ function applicationButtons(applicationId: string, disabled = false) {
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
       .setCustomId(`approve_application:${applicationId}`)
-      .setLabel("Potvrdi")
+      .setLabel("Approve")
       .setEmoji("🟢")
       .setStyle(ButtonStyle.Success)
       .setDisabled(disabled),
     new ButtonBuilder()
       .setCustomId(`reject_application:${applicationId}`)
-      .setLabel("Odbij")
+      .setLabel("Reject")
       .setEmoji("🔴")
       .setStyle(ButtonStyle.Danger)
       .setDisabled(disabled),
@@ -253,7 +253,7 @@ function copyRoleButton(sourceRoleId: string, targetRoleId: string, disabled = f
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
       .setCustomId(`copy_role:${sourceRoleId}:${targetRoleId}`)
-      .setLabel("Kopiraj sve")
+      .setLabel("Copy all")
       .setEmoji("✅")
       .setStyle(ButtonStyle.Success)
       .setDisabled(disabled),
@@ -264,7 +264,7 @@ function applicationStartButton(guildId: string) {
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
       .setCustomId(`start_application:${guildId}`)
-      .setLabel("Prijavi se")
+      .setLabel("Apply")
       .setStyle(ButtonStyle.Primary),
   );
 }
@@ -281,30 +281,30 @@ function applicationEmbed(
       : 0xf0b429;
 
   const status = application.status === "approved"
-    ? "ODOBRENO"
+    ? "APPROVED"
     : application.status === "rejected"
-      ? "ODBIJENO"
-      : "ČEKA POTVRDU";
+      ? "REJECTED"
+      : "PENDING";
 
   const embed = new EmbedBuilder()
     .setColor(color)
-    .setTitle(application.status === "pending" ? "📋 NOVA PRIJAVA" : `📋 PRIJAVA — ${status}`)
-    .setDescription(`Prijava: \`${application.id}\``)
+    .setTitle(application.status === "pending" ? "📋 NEW APPLICATION" : `📋 APPLICATION — ${status}`)
+    .setDescription(`Application: \`${application.id}\``)
     .addFields(
-      { name: "Ime i prezime", value: `${application.firstName} ${application.lastName}`, inline: true },
+      { name: "First and last name", value: `${application.firstName} ${application.lastName}`, inline: true },
       { name: "ID", value: application.memberId, inline: true },
       { name: "Rank", value: `Rank ${application.rank}`, inline: true },
-      { name: "Osoba koja ga je ubacila", value: application.invitedBy, inline: true },
-      { name: "Korisnik", value: memberMention, inline: true },
-      { name: "Dodeljena uloga", value: roleMention, inline: true },
+      { name: "Who added them", value: application.invitedBy, inline: true },
+      { name: "User", value: memberMention, inline: true },
+      { name: "Assigned role", value: roleMention, inline: true },
     )
     .setTimestamp(new Date(application.createdAt));
 
   if (application.rejectionReason) {
-    embed.addFields({ name: "Razlog odbijanja", value: application.rejectionReason });
+    embed.addFields({ name: "Rejection reason", value: application.rejectionReason });
   }
   if (application.decidedAt) {
-    embed.addFields({ name: "Vreme odluke", value: `<t:${Math.floor(new Date(application.decidedAt).getTime() / 1000)}:F>` });
+    embed.addFields({ name: "Decision time", value: `<t:${Math.floor(new Date(application.decidedAt).getTime() / 1000)}:F>` });
   }
   return embed;
 }
@@ -326,19 +326,19 @@ function buildApplicationModal(guildId: string, rank: number): ModalBuilder {
 
   return new ModalBuilder()
     .setCustomId(`submit_application:${guildId}:${rank}`)
-    .setTitle("Prijava za server")
+    .setTitle("Server application")
     .addComponents(
       new ActionRowBuilder<TextInputBuilder>().addComponents(
-        input("first_name", "Ime", "Unesi ime"),
+        input("first_name", "First name", "Enter your first name"),
       ),
       new ActionRowBuilder<TextInputBuilder>().addComponents(
-        input("last_name", "Prezime", "Unesi prezime"),
+        input("last_name", "Last name", "Enter your last name"),
       ),
       new ActionRowBuilder<TextInputBuilder>().addComponents(
-        input("member_id", "ID", "Unesi svoj ID"),
+        input("member_id", "ID", "Enter your ID"),
       ),
       new ActionRowBuilder<TextInputBuilder>().addComponents(
-        input("invited_by", "Osoba koja vas je ubacila", "Upišite ime osobe koja vas je ubacila"),
+        input("invited_by", "Who added/invited you", "Enter the name of the person who added you"),
       ),
     );
 }
@@ -347,21 +347,21 @@ function applicationPrompt(guildId: string, config: GuildConfig) {
   const rankOptions = config.rankRoles.map((entry) => ({
     label: `Rank ${entry.rank}`,
     value: String(entry.rank),
-    description: "Izaberi rank za koji se prijavljuješ",
+    description: "Choose the rank you are applying for",
   }));
 
   return {
     content:
       rankOptions.length > 0
-        ? "Klikni na rank za koji se prijavljuješ, pa otvori privatnu formu."
-        : "HC još nije podesio rankove. Pokušaj ponovo kasnije.",
+        ? "Choose the rank you are applying for, then open the private application form."
+        : "HC has not configured any ranks yet. Please try again later.",
     components: [
       ...(rankOptions.length > 0
         ? [
             new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
               new StringSelectMenuBuilder()
                 .setCustomId(`choose_rank:${guildId}`)
-                .setPlaceholder("Izaberi rank")
+                .setPlaceholder("Choose a rank")
                 .addOptions(rankOptions),
             ),
           ]
@@ -372,12 +372,12 @@ function applicationPrompt(guildId: string, config: GuildConfig) {
 
 function buildSelectedRankPrompt(guildId: string, rank: number) {
   return {
-    content: `Izabran je **Rank ${rank}**. Klikni dugme da popuniš privatnu formu.`,
+    content: `**Rank ${rank}** selected. Click the button to complete the private application form.`,
     components: [
       new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder()
           .setCustomId(`open_application:${guildId}:${rank}`)
-          .setLabel("Otvori prijavu")
+          .setLabel("Open application")
           .setStyle(ButtonStyle.Primary),
       ),
     ],
@@ -387,13 +387,13 @@ function buildSelectedRankPrompt(guildId: string, rank: number) {
 function buildRejectionModal(applicationId: string): ModalBuilder {
   return new ModalBuilder()
     .setCustomId(`reject_reason:${applicationId}`)
-    .setTitle("Odbijanje prijave")
+    .setTitle("Reject application")
     .addComponents(
       new ActionRowBuilder<TextInputBuilder>().addComponents(
         new TextInputBuilder()
           .setCustomId("reason")
-          .setLabel("Razlog odbijanja")
-          .setPlaceholder("Opcionalno")
+          .setLabel("Rejection reason")
+          .setPlaceholder("Optional")
           .setStyle(TextInputStyle.Paragraph)
           .setRequired(false)
           .setMaxLength(500),
@@ -410,26 +410,26 @@ function createCommands() {
   return [
     {
       name: commandNames.setup,
-      description: "Objavi panel sa dugmetom i podesi kanale za prijave",
+      description: "Publish the application panel and configure application channels",
       options: [
         {
           type: 7,
           name: "target_channel",
-          description: "Kanal u koji se objavljuje panel za prijavu",
+          description: "Channel where the application panel is published",
           required: true,
           channel_types: [ChannelType.GuildText, ChannelType.GuildAnnouncement],
         },
         {
           type: 7,
           name: "hc_channel",
-          description: "Kanal u koji stižu prijave za potvrdu",
+          description: "Channel where applications are sent for approval",
           required: true,
           channel_types: [ChannelType.GuildText, ChannelType.GuildAnnouncement],
         },
         {
           type: 7,
           name: "log_channel",
-          description: "Kanal u koji se zapisuju odobrene i odbijene prijave",
+          description: "Channel where approved and rejected applications are logged",
           required: true,
           channel_types: [ChannelType.GuildText, ChannelType.GuildAnnouncement],
         },
@@ -437,12 +437,12 @@ function createCommands() {
     },
     {
       name: commandNames.addRank,
-      description: "Poveži broj ranka sa Discord rolom",
+      description: "Link a rank number to a Discord role",
       options: [
         {
           type: 4,
           name: "rank",
-          description: "Broj ranka od 1 do 10",
+          description: "Rank number from 1 to 10",
           required: true,
           min_value: 1,
           max_value: 10,
@@ -450,19 +450,19 @@ function createCommands() {
         {
           type: 8,
           name: "role",
-          description: "Discord rola za ovaj rank",
+          description: "Discord role for this rank",
           required: true,
         },
       ],
     },
     {
       name: commandNames.removeRank,
-      description: "Obriši podešavanje za rank",
+      description: "Remove the rank configuration",
       options: [
         {
           type: 4,
           name: "rank",
-          description: "Broj ranka od 1 do 10",
+          description: "Rank number from 1 to 10",
           required: true,
           min_value: 1,
           max_value: 10,
@@ -471,58 +471,58 @@ function createCommands() {
     },
     {
       name: commandNames.listRanks,
-      description: "Prikaži podešene rankove",
+      description: "List configured ranks",
     },
     {
       name: commandNames.addHcRole,
-      description: "Dozvoli roli da potvrđuje i odbija prijave",
+      description: "Allow a role to approve and reject applications",
       options: [
         {
           type: 8,
           name: "role",
-          description: "HC rola",
+          description: "HC role",
           required: true,
         },
       ],
     },
     {
       name: commandNames.removeHcRole,
-      description: "Ukloni rolu iz HC dozvola",
+      description: "Remove a role from the HC permissions",
       options: [
         {
           type: 8,
           name: "role",
-          description: "HC rola",
+          description: "HC role",
           required: true,
         },
       ],
     },
     {
       name: commandNames.listHcRoles,
-      description: "Prikaži role koje mogu obrađivati prijave",
+      description: "List roles that can process applications",
     },
     {
       name: commandNames.setupHcRoles,
-      description: "Odaberi sve Admin/HC roleove koji obrađuju prijave",
+      description: "Select all Admin/HC roles that process applications",
     },
     {
       name: commandNames.status,
-      description: "Prikaži trenutno podešavanje verifikacije",
+      description: "Show the current verification configuration",
     },
     {
       name: commandNames.copyRole,
-      description: "Kopiraj sve dostupne postavke sa jedne role na drugu",
+      description: "Copy all available settings from one role to another",
       options: [
         {
           type: 8,
           name: "source_role",
-          description: "Rola sa koje se kopiraju postavke",
+          description: "Role to copy settings from",
           required: true,
         },
         {
           type: 8,
           name: "target_role",
-          description: "Rola na koju se kopiraju postavke",
+          description: "Role to copy settings to",
           required: true,
         },
       ],
@@ -532,7 +532,7 @@ function createCommands() {
 
 async function handleSetup(interaction: ChatInputCommandInteraction): Promise<void> {
   if (!isApplicationStaff(interaction)) {
-    await interaction.reply({ content: "Ovu komandu mogu koristiti samo HC/admini.", ephemeral: true });
+    await interaction.reply({ content: "Only HC members and administrators can use this command.", ephemeral: true });
     return;
   }
 
@@ -545,35 +545,35 @@ async function handleSetup(interaction: ChatInputCommandInteraction): Promise<vo
     ![ChannelType.GuildText, ChannelType.GuildAnnouncement].includes(hcChannel.type) ||
     ![ChannelType.GuildText, ChannelType.GuildAnnouncement].includes(logChannel.type)
   ) {
-    await interaction.reply({ content: "Izaberi tekstualne kanale.", ephemeral: true });
+    await interaction.reply({ content: "Choose text channels.", ephemeral: true });
     return;
   }
 
   const guild = interaction.guild;
   if (!guild) {
-    await interaction.reply({ content: "Server nije dostupan.", ephemeral: true });
+    await interaction.reply({ content: "The server is not available.", ephemeral: true });
     return;
   }
 
   const botMember = await guild.members.fetchMe().catch(() => undefined);
   if (!botMember) {
     await interaction.reply({
-      content: "Ne mogu da proverim botove dozvole na serveru. Proveri da je bot član ovog servera.",
+      content: "I cannot check the bot's server permissions. Make sure the bot is a member of this server.",
       ephemeral: true,
     });
     return;
   }
 
   const channelChecks = [
-    { channel: targetChannel, label: "panel kanal" },
-    { channel: hcChannel, label: "HC kanal" },
-    { channel: logChannel, label: "log kanal" },
+    { channel: targetChannel, label: "panel channel" },
+    { channel: hcChannel, label: "HC channel" },
+    { channel: logChannel, label: "log channel" },
   ];
   for (const { channel, label } of channelChecks) {
     const missing = getMissingChannelPermissions(channel, botMember, channelSendPermissions);
     if (missing.length > 0) {
       await interaction.reply({
-        content: `Bot ne može koristiti ${label} <#${channel.id}>. Nedostaju dozvole: ${missing.join(", ")}.`,
+        content: `The bot cannot use the ${label} <#${channel.id}>. Missing permissions: ${missing.join(", ")}.`,
         ephemeral: true,
       });
       return;
@@ -581,7 +581,7 @@ async function handleSetup(interaction: ChatInputCommandInteraction): Promise<vo
   }
 
   if (!("send" in targetChannel)) {
-    await interaction.reply({ content: "Izabrani panel kanal ne može slati poruke.", ephemeral: true });
+    await interaction.reply({ content: "The selected panel channel cannot send messages.", ephemeral: true });
     return;
   }
 
@@ -589,29 +589,29 @@ async function handleSetup(interaction: ChatInputCommandInteraction): Promise<vo
   try {
     panelMessage = await targetChannel.send({
       content: [
-        "## 📋 Prijava za server",
+        "## 📋 Server application",
         "",
-        "Klikni **dugme ispod** kako bi privatno ispunio prijavu.",
+        "Click the **button below** to fill out the application privately.",
         "",
-        "### Kako ispuniti prijavu?",
+        "### How to complete the application",
         "",
-        "1. Klikni dugme **Prijavi se**.",
-        "2. Odaberi **rank** koji želiš.",
-        "3. Upiši svoje **ime i prezime**.",
-        "4. Upiši svoj **ID**.",
-        "5. Upiši ime **osobe koja te je ubacila**.",
-        "6. Provjeri jesu li svi podaci točni.",
-        "7. Pošalji prijavu i pričekaj da je **HC/Admin potvrdi**.",
+        "1. Click the **Apply** button.",
+        "2. Choose the **rank** you want.",
+        "3. Enter your **first and last name**.",
+        "4. Enter your **ID**.",
+        "5. Enter the name of the **person who added you**.",
+        "6. Check that all information is correct.",
+        "7. Submit the application and wait for **HC/Admin approval**.",
         "",
-        "⚠️ **VAŽNO:** Ako ne ispuniš prijavu ili ne uneseš sve potrebne podatke, **nećeš dobiti rank/role**.",
+        "⚠️ **IMPORTANT:** If you do not complete the application or provide all required information, **you will not receive a rank/role**.",
         "",
-        "Nakon slanja prijave moraš pričekati potvrdu HC/Admina. **Rank se dodjeljuje tek nakon što prijava bude potvrđena.**",
+        "After submitting the application, you must wait for HC/Admin approval. **The rank is assigned only after the application is approved.**",
       ].join("\n"),
       components: [applicationStartButton(interaction.guildId!)],
     });
   } catch {
     await interaction.reply({
-      content: "Ne mogu da objavim panel. Proveri da bot ima View Channel i Send Messages dozvole.",
+      content: "I could not publish the panel. Make sure the bot has View Channel and Send Messages permissions.",
       ephemeral: true,
     });
     return;
@@ -626,14 +626,14 @@ async function handleSetup(interaction: ChatInputCommandInteraction): Promise<vo
 
   await interaction.reply({
     content:
-      `Podešeno. Panel za prijavu je objavljen u <#${targetChannel.id}> (\`${panelMessage.id}\`), prijave idu u <#${hcChannel.id}>, a log u <#${logChannel.id}>.`,
+      `Configured. The application panel was published in <#${targetChannel.id}> (\`${panelMessage.id}\`), applications go to <#${hcChannel.id}>, and logs go to <#${logChannel.id}>.`,
     ephemeral: true,
   });
 }
 
 async function handleAddRank(interaction: ChatInputCommandInteraction): Promise<void> {
   if (!isApplicationStaff(interaction)) {
-    await interaction.reply({ content: "Ovu komandu mogu koristiti samo HC/admini.", ephemeral: true });
+    await interaction.reply({ content: "Only HC members and administrators can use this command.", ephemeral: true });
     return;
   }
 
@@ -651,14 +651,14 @@ async function handleAddRank(interaction: ChatInputCommandInteraction): Promise<
   await saveState();
 
   await interaction.reply({
-    content: `Rank ${rank} je sada povezan sa rolom ${role}.`,
+    content: `Rank ${rank} is now linked to the ${role} role.`,
     ephemeral: true,
   });
 }
 
 async function handleRemoveRank(interaction: ChatInputCommandInteraction): Promise<void> {
   if (!isApplicationStaff(interaction)) {
-    await interaction.reply({ content: "Ovu komandu mogu koristiti samo HC/admini.", ephemeral: true });
+    await interaction.reply({ content: "Only HC members and administrators can use this command.", ephemeral: true });
     return;
   }
 
@@ -670,21 +670,21 @@ async function handleRemoveRank(interaction: ChatInputCommandInteraction): Promi
 
   await interaction.reply({
     content: before === config.rankRoles.length
-      ? `Rank ${rank} nije bio podešen.`
-      : `Podešavanje za rank ${rank} je obrisano.`,
+      ? `Rank ${rank} was not configured.`
+      : `The configuration for rank ${rank} was removed.`,
     ephemeral: true,
   });
 }
 
 async function handleListRanks(interaction: ChatInputCommandInteraction): Promise<void> {
   if (!isApplicationStaff(interaction)) {
-    await interaction.reply({ content: "Ovu komandu mogu koristiti samo HC/admini.", ephemeral: true });
+    await interaction.reply({ content: "Only HC members and administrators can use this command.", ephemeral: true });
     return;
   }
 
   const config = getGuildConfig(interaction.guildId!);
   if (config.rankRoles.length === 0) {
-    await interaction.reply({ content: "Nema podešenih rankova. Koristi `/rank-add`.", ephemeral: true });
+    await interaction.reply({ content: "No ranks are configured. Use `/rank-add`.", ephemeral: true });
     return;
   }
 
@@ -698,7 +698,7 @@ async function handleListRanks(interaction: ChatInputCommandInteraction): Promis
 
 async function handleAddHcRole(interaction: ChatInputCommandInteraction): Promise<void> {
   if (!isApplicationStaff(interaction)) {
-    await interaction.reply({ content: "Ovu komandu mogu koristiti samo administratori.", ephemeral: true });
+    await interaction.reply({ content: "Only administrators can use this command.", ephemeral: true });
     return;
   }
 
@@ -710,14 +710,14 @@ async function handleAddHcRole(interaction: ChatInputCommandInteraction): Promis
   }
 
   await interaction.reply({
-    content: `${role} sada može da potvrđuje i odbija prijave.`,
+    content: `${role} can now approve and reject applications.`,
     ephemeral: true,
   });
 }
 
 async function handleRemoveHcRole(interaction: ChatInputCommandInteraction): Promise<void> {
   if (!isApplicationStaff(interaction)) {
-    await interaction.reply({ content: "Ovu komandu mogu koristiti samo administratori.", ephemeral: true });
+    await interaction.reply({ content: "Only administrators can use this command.", ephemeral: true });
     return;
   }
 
@@ -729,15 +729,15 @@ async function handleRemoveHcRole(interaction: ChatInputCommandInteraction): Pro
 
   await interaction.reply({
     content: before === config.hcRoleIds.length
-      ? `${role} nije bila podešena kao HC rola.`
-      : `${role} više ne može da obrađuje prijave.`,
+      ? `${role} was not configured as an HC role.`
+      : `${role} can no longer process applications.`,
     ephemeral: true,
   });
 }
 
 async function handleListHcRoles(interaction: ChatInputCommandInteraction): Promise<void> {
   if (!isApplicationStaff(interaction)) {
-    await interaction.reply({ content: "Ovu komandu mogu koristiti samo administratori.", ephemeral: true });
+    await interaction.reply({ content: "Only administrators can use this command.", ephemeral: true });
     return;
   }
 
@@ -745,30 +745,30 @@ async function handleListHcRoles(interaction: ChatInputCommandInteraction): Prom
   await interaction.reply({
     content: config.hcRoleIds.length > 0
       ? config.hcRoleIds.map((roleId) => `<@&${roleId}>`).join("\n")
-      : "Nema posebno podešenih HC rola. Administratori sa Manage Server dozvolom i dalje mogu obrađivati prijave.",
+      : "No specific HC roles are configured. Administrators with the Manage Server permission can still process applications.",
     ephemeral: true,
   });
 }
 
 async function handleSetupHcRoles(interaction: ChatInputCommandInteraction): Promise<void> {
   if (!isApplicationStaff(interaction)) {
-    await interaction.reply({ content: "Ovu komandu mogu koristiti samo administratori.", ephemeral: true });
+    await interaction.reply({ content: "Only administrators can use this command.", ephemeral: true });
     return;
   }
 
   const config = getGuildConfig(interaction.guildId!);
   await interaction.reply({
     content: [
-      "Odaberi sve roleove koji mogu potvrđivati i odbijati prijave.",
+      "Select all roles that can approve and reject applications.",
       config.hcRoleIds.length > 0
-        ? `Trenutno odabrani: ${config.hcRoleIds.map((roleId) => `<@&${roleId}>`).join(", ")}`
-        : "Trenutno nema odabranih roleova.",
+        ? `Currently selected: ${config.hcRoleIds.map((roleId) => `<@&${roleId}>`).join(", ")}`
+        : "No roles are currently selected.",
     ].join("\n"),
     components: [
       new ActionRowBuilder<RoleSelectMenuBuilder>().addComponents(
         new RoleSelectMenuBuilder()
           .setCustomId(`configure_hc_roles:${interaction.guildId}`)
-          .setPlaceholder("Odaberi Admin/HC roleove")
+          .setPlaceholder("Select Admin/HC roles")
           .setMinValues(0)
           .setMaxValues(25),
       ),
@@ -779,13 +779,13 @@ async function handleSetupHcRoles(interaction: ChatInputCommandInteraction): Pro
 
 async function handleHcRoleSelection(interaction: RoleSelectMenuInteraction): Promise<void> {
   if (!isAdmin(interaction)) {
-    await interaction.reply({ content: "Ovu komandu mogu koristiti samo administratori.", ephemeral: true });
+    await interaction.reply({ content: "Only administrators can use this command.", ephemeral: true });
     return;
   }
 
   const guildId = interaction.guildId;
   if (!guildId) {
-    await interaction.reply({ content: "Server nije dostupan.", ephemeral: true });
+    await interaction.reply({ content: "The server is not available.", ephemeral: true });
     return;
   }
 
@@ -795,15 +795,15 @@ async function handleHcRoleSelection(interaction: RoleSelectMenuInteraction): Pr
 
   await interaction.update({
     content: config.hcRoleIds.length > 0
-      ? `✅ Podešeni Admin/HC roleovi: ${config.hcRoleIds.map((roleId) => `<@&${roleId}>`).join(", ")}\nOni će dobijati obaveštenja i moći će da potvrđuju ili odbijaju prijave.`
-      : "✅ Uklonjeni su svi posebno podešeni Admin/HC roleovi. Samo server administratori mogu obrađivati prijave.",
+      ? `✅ Configured Admin/HC roles: ${config.hcRoleIds.map((roleId) => `<@&${roleId}>`).join(", ")}\nThey will be notified and can approve or reject applications.`
+      : "✅ All specifically configured Admin/HC roles were removed. Only server administrators can process applications.",
     components: [],
   });
 }
 
 async function handleStatus(interaction: ChatInputCommandInteraction): Promise<void> {
   if (!isApplicationStaff(interaction)) {
-    await interaction.reply({ content: "Ovu komandu mogu koristiti samo HC/admini.", ephemeral: true });
+    await interaction.reply({ content: "Only HC members and administrators can use this command.", ephemeral: true });
     return;
   }
 
@@ -814,12 +814,12 @@ async function handleStatus(interaction: ChatInputCommandInteraction): Promise<v
 
   await interaction.reply({
     content: [
-      `Panel za prijavu: ${config.targetMessageId ? `<#${config.targetChannelId}> / \`${config.targetMessageId}\`` : "nije podešen"}`,
-      `HC kanal: ${config.hcChannelId ? `<#${config.hcChannelId}>` : "nije podešen"}`,
-      `Log kanal: ${config.logChannelId ? `<#${config.logChannelId}>` : "nije podešen"}`,
-      `Podešenih rankova: ${config.rankRoles.length}/10`,
-      `HC rola: ${config.hcRoleIds.length > 0 ? config.hcRoleIds.map((roleId) => `<@&${roleId}>`).join(", ") : "samo administratori"}`,
-      `Prijava na čekanju: ${pending}`,
+      `Application panel: ${config.targetMessageId ? `<#${config.targetChannelId}> / \`${config.targetMessageId}\`` : "not configured"}`,
+      `HC channel: ${config.hcChannelId ? `<#${config.hcChannelId}>` : "not configured"}`,
+      `Log channel: ${config.logChannelId ? `<#${config.logChannelId}>` : "not configured"}`,
+      `Configured ranks: ${config.rankRoles.length}/10`,
+      `HC roles: ${config.hcRoleIds.length > 0 ? config.hcRoleIds.map((roleId) => `<@&${roleId}>`).join(", ") : "administrators only"}`,
+      `Pending applications: ${pending}`,
     ].join("\n"),
     ephemeral: true,
   });
@@ -828,7 +828,7 @@ async function handleStatus(interaction: ChatInputCommandInteraction): Promise<v
 async function handleCopyRoleCommand(interaction: ChatInputCommandInteraction): Promise<void> {
   if (!canUseHcCommand(interaction)) {
     await interaction.reply({
-      content: "Ovu komandu mogu koristiti samo administratori ili podešene HC role.",
+      content: "Only administrators or configured HC roles can use this command.",
       ephemeral: true,
     });
     return;
@@ -836,7 +836,7 @@ async function handleCopyRoleCommand(interaction: ChatInputCommandInteraction): 
 
   const guild = interaction.guild;
   if (!guild) {
-    await interaction.reply({ content: "Ova komanda se može koristiti samo na serveru.", ephemeral: true });
+    await interaction.reply({ content: "This command can only be used in a server.", ephemeral: true });
     return;
   }
 
@@ -845,13 +845,13 @@ async function handleCopyRoleCommand(interaction: ChatInputCommandInteraction): 
   const sourceRole = await guild.roles.fetch(sourceRoleOption.id);
   const targetRole = await guild.roles.fetch(targetRoleOption.id);
   if (!sourceRole || !targetRole) {
-    await interaction.reply({ content: "Source ili Target Role više ne postoji.", ephemeral: true });
+    await interaction.reply({ content: "The Source or Target Role no longer exists.", ephemeral: true });
     return;
   }
 
   if (sourceRole.id === targetRole.id) {
     await interaction.reply({
-      content: "Source Role i Target Role moraju biti različite role.",
+      content: "Source Role and Target Role must be different roles.",
       ephemeral: true,
     });
     return;
@@ -859,7 +859,7 @@ async function handleCopyRoleCommand(interaction: ChatInputCommandInteraction): 
 
   if (sourceRole.id === interaction.guildId || targetRole.id === interaction.guildId) {
     await interaction.reply({
-      content: "Defaultna @everyone rola ne može biti source ili target.",
+      content: "The default @everyone role cannot be the source or target.",
       ephemeral: true,
     });
     return;
@@ -867,7 +867,7 @@ async function handleCopyRoleCommand(interaction: ChatInputCommandInteraction): 
 
   if (targetRole.managed || !targetRole.editable) {
     await interaction.reply({
-      content: "Bot ne može menjati Target Role. Proveri da target nije managed rola i da je botova rola iznad nje.",
+      content: "The bot cannot modify the Target Role. Make sure it is not a managed role and that the bot role is above it.",
       ephemeral: true,
     });
     return;
@@ -878,8 +878,8 @@ async function handleCopyRoleCommand(interaction: ChatInputCommandInteraction): 
       `**Source Role:** ${sourceRole}`,
       `**Target Role:** ${targetRole}`,
       "",
-      "Kopiraće se permissions, hoist, mentionable, icon/unicode emoji i sve channel/category dozvole koje Discord API dopušta. Ime i boja Target Role ostaju nepromenjeni.",
-      "Klikni dugme tek kada proveriš oba rolea.",
+      "Permissions, hoist, mentionable, icon/unicode emoji, and all channel/category permissions supported by the Discord API will be copied. The Target Role name and color will remain unchanged.",
+      "Click the button only after checking both roles.",
     ].join("\n"),
     components: [copyRoleButton(sourceRole.id, targetRole.id)],
     ephemeral: true,
@@ -954,7 +954,7 @@ async function copyRoleSettings(
 async function handleCopyRoleButton(interaction: ButtonInteraction): Promise<void> {
   if (!canUseHcCommand(interaction)) {
     await interaction.reply({
-      content: "Ovu komandu mogu koristiti samo administratori ili podešene HC role.",
+      content: "Only administrators or configured HC roles can use this command.",
       ephemeral: true,
     });
     return;
@@ -963,23 +963,23 @@ async function handleCopyRoleButton(interaction: ButtonInteraction): Promise<voi
   const [, sourceRoleId, targetRoleId] = interaction.customId.split(":");
   const guild = interaction.guild;
   if (!guild || !sourceRoleId || !targetRoleId) {
-    await interaction.reply({ content: "Server ili role nisu dostupni.", ephemeral: true });
+    await interaction.reply({ content: "The server or roles are not available.", ephemeral: true });
     return;
   }
 
   const sourceRole = await guild.roles.fetch(sourceRoleId);
   const targetRole = await guild.roles.fetch(targetRoleId);
   if (!sourceRole || !targetRole) {
-    await interaction.reply({ content: "Source ili Target Role više ne postoji.", ephemeral: true });
+    await interaction.reply({ content: "The Source or Target Role no longer exists.", ephemeral: true });
     return;
   }
   if (sourceRole.id === targetRole.id) {
-    await interaction.reply({ content: "Source Role i Target Role moraju biti različite role.", ephemeral: true });
+    await interaction.reply({ content: "Source Role and Target Role must be different roles.", ephemeral: true });
     return;
   }
   if (targetRole.managed || !targetRole.editable) {
     await interaction.reply({
-      content: "Bot ne može menjati Target Role. Proveri da target nije managed rola i da je botova rola iznad nje.",
+      content: "The bot cannot modify the Target Role. Make sure it is not a managed role and that the bot role is above it.",
       ephemeral: true,
     });
     return;
@@ -988,38 +988,38 @@ async function handleCopyRoleButton(interaction: ButtonInteraction): Promise<voi
   const botMember = await guild.members.fetchMe();
   if (!botMember.permissions.has(PermissionFlagsBits.ManageRoles)) {
     await interaction.reply({
-      content: "Bot nema Manage Roles dozvolu, pa ne može kopirati postavke role.",
+      content: "The bot does not have the Manage Roles permission, so it cannot copy role settings.",
       ephemeral: true,
     });
     return;
   }
   if (!botMember.permissions.has(PermissionFlagsBits.ManageChannels)) {
     await interaction.reply({
-      content: "Bot nema Manage Channels dozvolu, pa ne može kopirati channel/category permissions.",
+      content: "The bot does not have the Manage Channels permission, so it cannot copy channel/category permissions.",
       ephemeral: true,
     });
     return;
   }
 
   await interaction.update({
-    content: `Kopiram sve postavke sa ${sourceRole} na ${targetRole}...`,
+    content: `Copying all settings from ${sourceRole} to ${targetRole}...`,
     components: [copyRoleButton(sourceRole.id, targetRole.id, true)],
   });
 
   try {
     const result = await copyRoleSettings(sourceRole, targetRole);
     const channelWarning = result.failedOverwrites > 0
-      ? `\nUpozorenje: ${result.failedOverwrites} channel/category dozvola nije mogla biti kopirana.`
+      ? `\nWarning: ${result.failedOverwrites} channel/category permissions could not be copied.`
       : "";
 
     await interaction.editReply({
       content: [
-        "✅ **Role uspješno kopiran!**",
+        "✅ **Role copied successfully!**",
         "",
         `Source: ${sourceRole}`,
         `Target: ${targetRole}`,
-        "Kopirano: sve dostupne postavke",
-        `Channel/category dozvole: ${result.copiedOverwrites} kopirano, ${result.removedOverwrites} uklonjeno.${channelWarning}`,
+        "Copied: all available settings except the Target Role name and color",
+        `Channel/category permissions: ${result.copiedOverwrites} copied, ${result.removedOverwrites} removed.${channelWarning}`,
       ].join("\n"),
       components: [],
     });
@@ -1030,11 +1030,11 @@ async function handleCopyRoleButton(interaction: ButtonInteraction): Promise<voi
     );
     await interaction.editReply({
       content: [
-        "❌ **Kopiranje role nije uspelo.**",
+        "❌ **Role copy failed.**",
         "",
         `Source: ${sourceRole}`,
         `Target: ${targetRole}`,
-        "Proveri da bot ima Manage Roles i Manage Channels, te da je botova rola iznad Target Role.",
+        "Make sure the bot has Manage Roles and Manage Channels permissions and that the bot role is above the Target Role.",
       ].join("\n"),
       components: [],
     });
@@ -1080,7 +1080,7 @@ async function handleApplicationSubmit(interaction: ModalSubmitInteraction) {
   const guild = client.guilds.cache.get(guildId);
   const config = guildId ? state.guilds[guildId] : undefined;
   if (!guild || !config?.hcChannelId) {
-    await interaction.reply({ content: "Verifikacija trenutno nije podešena.", ephemeral: true });
+    await interaction.reply({ content: "Verification is not configured yet.", ephemeral: true });
     return;
   }
 
@@ -1100,7 +1100,7 @@ async function handleApplicationSubmit(interaction: ModalSubmitInteraction) {
     rank > 10
   ) {
     await interaction.reply({
-      content: "Proveri ime, prezime, ID i osobu koja vas je ubacila.",
+      content: "Check your first name, last name, ID, and who added/invited you.",
       ephemeral: true,
     });
     return;
@@ -1109,7 +1109,31 @@ async function handleApplicationSubmit(interaction: ModalSubmitInteraction) {
   const rankRole = getRankRole(config, rank);
   if (!rankRole) {
     await interaction.reply({
-      content: `Rank ${rank} još nije podešen na serveru. Javi se HC-u.`,
+      content: `Rank ${rank} is not configured on the server yet. Contact HC.`,
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const applicantMember = await guild.members.fetch(interaction.user.id).catch(() => undefined);
+  if (!applicantMember) {
+    await interaction.reply({
+      content: "I cannot check your existing rank roles. Try again or contact an administrator.",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const existingRankRoles = config.rankRoles.filter((entry) =>
+    applicantMember.roles.cache.has(entry.roleId),
+  );
+  if (existingRankRoles.length > 0) {
+    await interaction.reply({
+      content: [
+        "❌ You cannot submit an application because you already have a rank role.",
+        `Existing ranks: ${existingRankRoles.map((entry) => `Rank ${entry.rank} (<@&${entry.roleId}>)`).join(", ")}`,
+        "Applications are only allowed for members who do not have any configured rank.",
+      ].join("\n"),
       ephemeral: true,
     });
     return;
@@ -1123,7 +1147,7 @@ async function handleApplicationSubmit(interaction: ModalSubmitInteraction) {
   );
   if (duplicateMemberId) {
     await interaction.reply({
-      content: "Ovaj ID već postoji u aktivnoj ili potvrđenoj prijavi. Proveri podatke sa HC-om.",
+      content: "This ID already exists in an active or approved application. Check the information with HC.",
       ephemeral: true,
     });
     return;
@@ -1136,7 +1160,7 @@ async function handleApplicationSubmit(interaction: ModalSubmitInteraction) {
       application.status === "pending",
   );
   if (hasPending) {
-    await interaction.reply({ content: "Već imaš prijavu koja čeka potvrdu HC-a.", ephemeral: true });
+    await interaction.reply({ content: "You already have an application waiting for HC approval.", ephemeral: true });
     return;
   }
 
@@ -1148,7 +1172,7 @@ async function handleApplicationSubmit(interaction: ModalSubmitInteraction) {
     !("send" in hcChannel)
   ) {
     await interaction.reply({
-      content: `❌ Podešeni HC kanal <#${config.hcChannelId}> nije dostupan ili nije tekstualni kanal. Administrator mora ponovo pokrenuti \`/verification-setup\`.`,
+      content: `❌ The configured HC channel <#${config.hcChannelId}> is unavailable or is not a text channel. An administrator must run \`/verification-setup\` again.`,
       ephemeral: true,
     });
     return;
@@ -1157,7 +1181,7 @@ async function handleApplicationSubmit(interaction: ModalSubmitInteraction) {
   const botMember = await guild.members.fetchMe().catch(() => undefined);
   if (!botMember) {
     await interaction.reply({
-      content: "❌ Ne mogu da proverim botove dozvole na serveru. Javi se administratoru.",
+      content: "❌ I cannot check the bot's server permissions. Contact an administrator.",
       ephemeral: true,
     });
     return;
@@ -1167,9 +1191,9 @@ async function handleApplicationSubmit(interaction: ModalSubmitInteraction) {
   if (missingPermissions.length > 0) {
     await interaction.reply({
       content: [
-        `❌ Bot ne može poslati prijavu u HC kanal <#${hcChannel.id}>.`,
-        `Nedostaju dozvole: ${missingPermissions.join(", ")}.`,
-        "Administrator treba da proveri dozvole kanala i botovu rolu.",
+        `❌ The bot cannot send the application to the HC channel <#${hcChannel.id}>.`,
+        `Missing permissions: ${missingPermissions.join(", ")}.`,
+        "An administrator should check the channel permissions and the bot role.",
       ].join("\n"),
       ephemeral: true,
     });
@@ -1183,9 +1207,9 @@ async function handleApplicationSubmit(interaction: ModalSubmitInteraction) {
   if (missingRoleIds.length > 0) {
     await interaction.reply({
       content: [
-        "❌ Jedna ili više podešenih Admin/HC rola više ne postoji na serveru.",
-        `Nedostaju role ID-jevi: ${missingRoleIds.join(", ")}`,
-        "Administrator treba ponovo podesiti role kroz `/hc-role-setup`.",
+        "❌ One or more configured Admin/HC roles no longer exist on the server.",
+        `Missing role IDs: ${missingRoleIds.join(", ")}`,
+        "An administrator should configure the roles again with `/hc-role-setup`.",
       ].join("\n"),
       ephemeral: true,
     });
@@ -1222,9 +1246,9 @@ async function handleApplicationSubmit(interaction: ModalSubmitInteraction) {
     logger.error({ err: error, channelId: hcChannel.id, applicationId: application.id }, "Could not send HC application");
     await interaction.reply({
       content: [
-        `❌ Slanje prijave u HC kanal <#${hcChannel.id}> nije uspelo.`,
-        "Proveri View Channel, Send Messages, Embed Links i Read Message History dozvole.",
-        discordErrorCode(error) ? `Discord kod greške: ${discordErrorCode(error)}.` : "Discord nije prihvatio poruku.",
+        `❌ Sending the application to the HC channel <#${hcChannel.id}> failed.`,
+        "Check the View Channel, Send Messages, Embed Links, and Read Message History permissions.",
+        discordErrorCode(error) ? `Discord error code: ${discordErrorCode(error)}.` : "Discord did not accept the message.",
       ].join("\n"),
       ephemeral: true,
     });
@@ -1235,7 +1259,7 @@ async function handleApplicationSubmit(interaction: ModalSubmitInteraction) {
   await saveState();
 
   await interaction.reply({
-    content: "Prijava je poslata HC-u na potvrdu. Sačekaj odgovor.",
+    content: "Your application was sent to HC for approval. Please wait for a response.",
     ephemeral: true,
   });
 }
@@ -1254,7 +1278,7 @@ async function sendApplicationLog(
   await channel.send({
     embeds: [
       applicationEmbed(application, `<@${application.applicantId}>`, roleMention)
-        .setTitle(`Log prijave — ${application.status === "approved" ? "POTVRĐENO" : "ODBIJENO"}`),
+        .setTitle(`Application log — ${application.status === "approved" ? "APPROVED" : "REJECTED"}`),
     ],
   });
 }
@@ -1269,23 +1293,23 @@ async function handleApproval(
   application: Application,
 ): Promise<void> {
   if (application.status !== "pending") {
-    await interaction.reply({ content: "Ova prijava je već rešena.", ephemeral: true });
+    await interaction.reply({ content: "This application has already been resolved.", ephemeral: true });
     return;
   }
 
   const guild = interaction.guild;
   if (!guild) {
-    await interaction.reply({ content: "Server nije dostupan.", ephemeral: true });
+    await interaction.reply({ content: "The server is not available.", ephemeral: true });
     return;
   }
   const config = getGuildConfig(guild.id);
   if (!canProcessApplications(interaction, config)) {
-    await interaction.reply({ content: "Samo podešene HC role i administratori mogu potvrditi prijavu.", ephemeral: true });
+    await interaction.reply({ content: "Only configured HC roles and administrators can approve applications.", ephemeral: true });
     return;
   }
   const rankRole = getRankRole(config, application.rank);
   if (!rankRole) {
-    await interaction.reply({ content: `Rank ${application.rank} više nije podešen.`, ephemeral: true });
+    await interaction.reply({ content: `Rank ${application.rank} is no longer configured.`, ephemeral: true });
     return;
   }
 
@@ -1293,14 +1317,14 @@ async function handleApproval(
   const member = await guild.members.fetch(application.applicantId).catch(() => undefined);
   if (!role || !member) {
     await interaction.reply({
-      content: "Ne mogu da pronađem rolu ili člana. Proveri da li je bot iznad rank role.",
+      content: "I cannot find the role or member. Check that the bot role is above the rank role.",
       ephemeral: true,
     });
     return;
   }
   if (!role.editable) {
     await interaction.reply({
-      content: "Bot ne može da dodeli ovu rolu. Premesti bot rolu iznad rank role u Discord podešavanjima.",
+      content: "The bot cannot assign this role. Move the bot role above the rank role in the Discord settings.",
       ephemeral: true,
     });
     return;
@@ -1309,21 +1333,21 @@ async function handleApproval(
   const botMember = await guild.members.fetchMe().catch(() => undefined);
   if (!botMember) {
     await interaction.reply({
-      content: "Ne mogu da proverim botove dozvole. Potvrda nije izvršena.",
+      content: "I cannot check the bot permissions. Approval was not completed.",
       ephemeral: true,
     });
     return;
   }
   if (!botMember.permissions.has(PermissionFlagsBits.ManageRoles)) {
     await interaction.reply({
-      content: "❌ Potvrda nije izvršena: bot nema Manage Roles dozvolu.",
+      content: "❌ Approval was not completed: the bot does not have the Manage Roles permission.",
       ephemeral: true,
     });
     return;
   }
   if (!botMember.permissions.has(PermissionFlagsBits.ManageNicknames) || !member.manageable) {
     await interaction.reply({
-      content: "❌ Potvrda nije izvršena: bot nema Manage Nicknames dozvolu ili ne može menjati nickname ovog člana.",
+      content: "❌ Approval was not completed: the bot does not have the Manage Nicknames permission or cannot change this member's nickname.",
       ephemeral: true,
     });
     return;
@@ -1341,9 +1365,9 @@ async function handleApproval(
     logger.error({ err: error, applicationId: application.id }, "Could not complete application approval");
     await interaction.followUp({
       content: [
-        "❌ Potvrda nije izvršena. Rank i nickname nisu uspešno primenjeni.",
-        "Proveri da bot ima Manage Roles i Manage Nicknames i da je njegova rola iznad rank role.",
-        discordErrorCode(error) ? `Discord kod greške: ${discordErrorCode(error)}.` : "",
+        "❌ Approval was not completed. The rank and nickname were not applied successfully.",
+        "Check that the bot has Manage Roles and Manage Nicknames permissions and that its role is above the rank role.",
+        discordErrorCode(error) ? `Discord error code: ${discordErrorCode(error)}.` : "",
       ].filter(Boolean).join("\n"),
       ephemeral: true,
     });
@@ -1363,7 +1387,7 @@ async function handleApproval(
         `<@${application.applicantId}>`,
         `<@&${rankRole.roleId}>`,
       ).addFields({
-        name: "Potvrdio",
+        name: "Approved by",
         value: `<@${interaction.user.id}>`,
         inline: true,
       }),
@@ -1373,7 +1397,7 @@ async function handleApproval(
   await sendApplicationLog(guild, config, application, `<@&${rankRole.roleId}>`);
 
   await interaction.followUp({
-    content: "✅ Prijava je potvrđena. Rank je dodeljen i nickname je promenjen.",
+    content: "✅ The application was approved. The rank was assigned and the nickname was changed.",
     ephemeral: true,
   });
 }
@@ -1384,17 +1408,17 @@ async function handleRejection(
   reason = "",
 ): Promise<void> {
   if (application.status !== "pending") {
-    await interaction.reply({ content: "Ova prijava je već rešena.", ephemeral: true });
+    await interaction.reply({ content: "This application has already been resolved.", ephemeral: true });
     return;
   }
   const guild = interaction.guild;
   if (!guild) {
-    await interaction.reply({ content: "Server nije dostupan.", ephemeral: true });
+    await interaction.reply({ content: "The server is not available.", ephemeral: true });
     return;
   }
   const config = getGuildConfig(guild.id);
   if (!canProcessApplications(interaction, config)) {
-    await interaction.reply({ content: "Samo podešene HC role i administratori mogu odbiti prijavu.", ephemeral: true });
+    await interaction.reply({ content: "Only configured HC roles and administrators can reject applications.", ephemeral: true });
     return;
   }
 
@@ -1408,9 +1432,9 @@ async function handleRejection(
   const rejectedEmbed = applicationEmbed(
     application,
     `<@${application.applicantId}>`,
-    rankRole ? `<@&${rankRole.roleId}>` : "Nije podešeno",
+    rankRole ? `<@&${rankRole.roleId}>` : "Not configured",
   ).addFields({
-    name: "Odbio",
+    name: "Rejected by",
     value: `<@${interaction.user.id}>`,
     inline: true,
   });
@@ -1421,17 +1445,17 @@ async function handleRejection(
       components: [applicationButtons(application.id, true)],
     });
     await interaction.followUp({
-      content: "✅ Prijava je odbijena i evidentirana.",
+      content: "✅ The application was rejected and recorded.",
       ephemeral: true,
     });
   } else {
-    await interaction.reply({ content: "Prijava je odbijena i evidentirana.", ephemeral: true });
+    await interaction.reply({ content: "The application was rejected and recorded.", ephemeral: true });
     await interaction.message?.edit({
       embeds: [rejectedEmbed],
       components: [applicationButtons(application.id, true)],
     }).catch(() => undefined);
   }
-  await sendApplicationLog(guild, config, application, rankRole ? `<@&${rankRole.roleId}>` : "Nije podešeno");
+  await sendApplicationLog(guild, config, application, rankRole ? `<@&${rankRole.roleId}>` : "Not configured");
 
 }
 
@@ -1440,7 +1464,7 @@ async function handleRankSelect(interaction: StringSelectMenuInteraction): Promi
   const rank = Number(interaction.values[0]);
   const config = state.guilds[guildId];
   if (!config || !getRankRole(config, rank)) {
-    await interaction.reply({ content: "Ovaj rank više nije dostupan.", ephemeral: true });
+    await interaction.reply({ content: "This rank is no longer available.", ephemeral: true });
     return;
   }
   await interaction.update(buildSelectedRankPrompt(guildId, rank));
@@ -1451,7 +1475,7 @@ async function handleButton(interaction: ButtonInteraction): Promise<void> {
     const [, guildId] = interaction.customId.split(":");
     const config = state.guilds[guildId];
     if (!config || interaction.guildId !== guildId) {
-      await interaction.reply({ content: "Ovaj panel više nije aktivan.", ephemeral: true });
+      await interaction.reply({ content: "This panel is no longer active.", ephemeral: true });
       return;
     }
 
@@ -1472,7 +1496,7 @@ async function handleButton(interaction: ButtonInteraction): Promise<void> {
     const rank = Number(rankValue);
     const config = state.guilds[guildId];
     if (!config || !getRankRole(config, rank)) {
-      await interaction.reply({ content: "Ovaj rank više nije dostupan.", ephemeral: true });
+      await interaction.reply({ content: "This rank is no longer available.", ephemeral: true });
       return;
     }
     await interaction.showModal(buildApplicationModal(guildId, rank));
@@ -1484,7 +1508,7 @@ async function handleButton(interaction: ButtonInteraction): Promise<void> {
     if (application) {
       await handleApproval(interaction, application);
     } else {
-      await interaction.reply({ content: "Prijava ne postoji ili je obrisana.", ephemeral: true });
+      await interaction.reply({ content: "The application does not exist or was deleted.", ephemeral: true });
     }
     return;
   }
@@ -1494,12 +1518,12 @@ async function handleButton(interaction: ButtonInteraction): Promise<void> {
     if (application) {
       const config = interaction.guildId ? state.guilds[interaction.guildId] : undefined;
       if (!canProcessApplications(interaction, config)) {
-        await interaction.reply({ content: "Samo podešene HC role i administratori mogu odbiti prijavu.", ephemeral: true });
+        await interaction.reply({ content: "Only configured HC roles and administrators can reject applications.", ephemeral: true });
         return;
       }
       await interaction.showModal(buildRejectionModal(application.id));
     } else {
-      await interaction.reply({ content: "Prijava ne postoji ili je obrisana.", ephemeral: true });
+      await interaction.reply({ content: "The application does not exist or was deleted.", ephemeral: true });
     }
   }
 }
@@ -1532,7 +1556,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const [, applicationId] = interaction.customId.split(":");
         const application = state.applications[applicationId];
         if (!application) {
-          await interaction.reply({ content: "Prijava ne postoji ili je obrisana.", ephemeral: true });
+          await interaction.reply({ content: "The application does not exist or was deleted.", ephemeral: true });
         } else {
           const reason = interaction.fields.getTextInputValue("reason").trim();
           await handleRejection(interaction, application, reason);
@@ -1543,10 +1567,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
     logger.error({ err: error, interactionId: interaction.id }, "Discord interaction failed");
     if (interaction.isRepliable()) {
       if (interaction.deferred) {
-        await interaction.followUp({ content: "Došlo je do greške. Pokušaj ponovo ili javi administratoru.", ephemeral: true })
+        await interaction.followUp({ content: "An error occurred. Try again or contact an administrator.", ephemeral: true })
           .catch(() => undefined);
       } else if (!interaction.replied) {
-        await interaction.reply({ content: "Došlo je do greške. Pokušaj ponovo ili javi administratoru.", ephemeral: true })
+        await interaction.reply({ content: "An error occurred. Try again or contact an administrator.", ephemeral: true })
           .catch(() => undefined);
       }
     }

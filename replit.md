@@ -47,7 +47,7 @@ Discord bot koji prikuplja prijave novih članova, šalje ih HC-u na potvrdu i n
 
 ## Product
 
-Nakon klika na dugme panela kandidat privatno bira rank, zatim u modalu popunjava ime, prezime, ID i ime osobe koja ga je ubacila. HC dobija prijavu sa dugmadima za odobrenje/odbijanje i opcionalnim razlogom odbijanja. Odobrenje dodaje izabranu rolu i postavlja nadimak u formatu `Ime Prezime | ID`, a odluka se šalje i u log kanal.
+Nakon klika na dugme panela kandidat privatno bira rank, zatim u modalu popunjava ime, prezime, ID i ime osobe koja ga je ubacila. Član koji već ima bilo koju podešenu rank rolu ne može poslati novu prijavu. HC dobija prijavu sa dugmadima za odobrenje/odbijanje i opcionalnim razlogom odbijanja. Odobrenje dodaje izabranu rolu i postavlja nadimak u formatu `Ime Prezime | ID`, a odluka se šalje i u log kanal.
 
 ## User preferences
 
