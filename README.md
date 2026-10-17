@@ -91,6 +91,8 @@ Gateway intents koje bot koristi:
 
 Privileged `Guild Members` intent nije potreban.
 
+Bot može biti dodat na više Discord servera. Komande se registruju na svakom postojećem serveru pri startu i na svakom novom serveru na koji se bot pozove dok radi. Podešavanja su odvojena po serveru: na svakom serveru administrator treba jednom pokrenuti `/verification-setup`, `/rank-add` i `/hc-role-setup` ili `/hc-role-add`.
+
 ## Komande
 
 ### Objavljivanje panela za prijave

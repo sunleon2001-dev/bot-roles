@@ -1528,11 +1528,24 @@ async function handleButton(interaction: ButtonInteraction): Promise<void> {
   }
 }
 
-client.once(Events.ClientReady, async (readyClient) => {
-  for (const guild of readyClient.guilds.cache.values()) {
+async function registerGuildCommands(guild: Guild): Promise<void> {
+  try {
     await guild.commands.set(createCommands());
+    logger.info({ guildId: guild.id, guildName: guild.name }, "Registered Discord commands for guild");
+  } catch (error) {
+    logger.error({ err: error, guildId: guild.id, guildName: guild.name }, "Could not register Discord commands for guild");
   }
+}
+
+client.once(Events.ClientReady, async (readyClient) => {
+  await Promise.all([...readyClient.guilds.cache.values()].map(registerGuildCommands));
   logger.info({ user: readyClient.user.tag, guilds: readyClient.guilds.cache.size }, "Discord bot ready");
+});
+
+client.on(Events.GuildCreate, (guild) => {
+  if (client.isReady()) {
+    void registerGuildCommands(guild);
+  }
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
